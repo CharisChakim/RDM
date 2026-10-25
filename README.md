@@ -7,7 +7,7 @@ engine/      download engine (library) + tests
 cli/         `rdm` command-line front end, used for benchmarks
 app/         Tauri v2 desktop app (src-tauri/ = Rust, ui/ = HTML/JS)
 extension/   Chrome/Edge MV3 extension
-bench/       IDM vs RDM benchmark script
+bench/       IDM vs RDM benchmark script + local test server (Range, per-connection throttle)
 ```
 
 ## How the engine works
@@ -49,6 +49,7 @@ The app listens on `127.0.0.1:47123` for the extension. It rejects requests that
 What the extension does:
 - **Downloads:** each browser download is paused and handed to RDM with the browser's own Cookie, Referer and User-Agent. The browser copy is then cancelled. If RDM isn't running, the browser keeps the download.
 - **Video:** media responses (`video/*`, `audio/*`, HLS playlists, ≥256 KB) are listed per tab. Each HLS stream is expanded into its qualities, and child playlists (single qualities, audio tracks) are hidden because they would only repeat those choices. Hovering a `<video>` shows a **Download this video** button with that list. The popup shows the same list.
+- **Files linked on the page:** the popup scans the page for links to downloadable files (archives, installers, documents, audio and video, plus any `<a download>`). Tick the ones you want and send them to RDM together, like IDM's "Download all links".
 - **Right-click → Download with RDM** works on links, images, video and audio.
 
 ## Known gaps vs IDM

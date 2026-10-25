@@ -4,8 +4,36 @@
   let host, btn, menu, target, hideTimer;
 
   const refresh = () => chrome.runtime.sendMessage({ type: 'get-media' }).then((m) => { media = m || []; }).catch(() => {});
-  chrome.runtime.onMessage.addListener((m) => { if (m.type === 'media-updated') refresh(); });
+  chrome.runtime.onMessage.addListener((m, _sender, reply) => {
+    if (m.type === 'media-updated') refresh();
+    // Only the top frame answers, so the popup gets one list per page.
+    if (m.type === 'scan-links' && window === window.top) reply(scanLinks());
+  });
   refresh();
+
+  // File types worth offering, after IDM's default capture list plus a few modern ones.
+  const DOWNLOADABLE = new RegExp('\\.(' + [
+    '3gp', '7z', 'aac', 'ace', 'aif', 'apk', 'arj', 'asf', 'avi', 'bin', 'bz2', 'exe', 'gz', 'gzip', 'img', 'iso',
+    'lzh', 'm4a', 'm4v', 'mkv', 'mov', 'mp3', 'mp4', 'mpa', 'mpe', 'mpeg', 'mpg', 'msi', 'msu', 'ogg', 'ogv', 'pdf',
+    'pps', 'ppt', 'qt', 'r\\d\\d', 'ra', 'rar', 'rm', 'rmvb', 'sea', 'sit', 'sitx', 'tar', 'tif', 'tiff', 'wav', 'wma',
+    'wmv', 'z', 'zip', 'webm', 'flac', 'opus', 'doc', 'docx', 'xls', 'xlsx', 'pptx', 'epub', 'dmg', 'deb', 'rpm',
+    'appimage', 'xz', 'tgz', 'zst', 'torrent',
+  ].join('|') + ')$', 'i');
+
+  // Links to files on this page, like IDM's "Download all links".
+  function scanLinks() {
+    const found = new Map();
+    const add = (href, text, explicit) => {
+      let u;
+      try { u = new URL(href, location.href); } catch { return; }
+      if (!/^https?:$/.test(u.protocol) || found.has(u.href)) return;
+      if (!explicit && !DOWNLOADABLE.test(decodeURIComponent(u.pathname))) return;
+      found.set(u.href, { url: u.href, text: (text || '').replace(/\s+/g, ' ').trim().slice(0, 80) });
+    };
+    document.querySelectorAll('a[href], area[href]').forEach((a) => add(a.href, a.textContent || a.title, a.hasAttribute('download')));
+    document.querySelectorAll('video[src], audio[src], source[src]').forEach((m) => add(m.src, '', false));
+    return [...found.values()];
+  }
 
   const size = (b) => (b ? ` ${(b / 1048576).toFixed(1)} MB` : '');
   // Entries come from the background: streams (one per quality) first, then files.

@@ -181,6 +181,16 @@ async function downloadMedia(tabId, url, variant) {
   });
 }
 
+// Several links picked in the popup; each goes to the app with the page as referrer.
+async function downloadUrls(tabId, urls) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  let sent = 0;
+  for (const url of urls) {
+    if (await sendToApp({ url, headers: await headersFor(url, tab?.url), file_name: null })) sent++;
+  }
+  return sent;
+}
+
 // ---- taking over browser downloads -----------------------------------------------------------
 
 chrome.downloads.onCreated.addListener(async (item) => {
@@ -215,6 +225,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg.type === 'get-media') getMedia(tabId).then(reply);
   else if (msg.type === 'get-entries') entries(tabId).then(reply);
   else if (msg.type === 'download-media') downloadMedia(tabId, msg.url, msg.variant).then(reply);
+  else if (msg.type === 'download-urls') downloadUrls(tabId, msg.urls).then(reply);
   else if (msg.type === 'status') appAlive().then(reply);
   else return false;
   return true; // reply is async
