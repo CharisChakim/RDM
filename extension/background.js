@@ -116,13 +116,69 @@ function cleanTitle(t) {
   return (t || 'video').replace(/^\(\d+\)\s*/, '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim().slice(0, 120) || 'video';
 }
 
-async function downloadMedia(tabId, url) {
+// The app parses playlists (one parser, in Rust); results are cached per playlist URL.
+const variantCache = new Map();
+async function hlsVariants(item) {
+  if (variantCache.has(item.url)) return variantCache.get(item.url);
+  try {
+    const headers = item.headers.length ? item.headers : await headersFor(item.url, item.pageUrl);
+    const r = await fetch(`${API}/hls/variants`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: item.url, headers }),
+    });
+    if (!r.ok) return null;
+    const variants = await r.json();
+    variantCache.set(item.url, variants);
+    if (variantCache.size > 100) variantCache.delete(variantCache.keys().next().value);
+    return variants;
+  } catch {
+    return null; // app not running: the stream is still offered, at best quality
+  }
+}
+
+function fileLabel(m) {
+  let name = '';
+  try { name = decodeURIComponent(new URL(m.url).pathname.split('/').pop()); } catch {}
+  return `${m.mime.split(';')[0] || 'media'} · ${name.slice(0, 40)}`;
+}
+
+// What to offer for a tab: every file, and every stream expanded into its qualities.
+// A player loads the master playlist and then one of its children (a quality or the audio track);
+// those children would only duplicate the master's choices, so they are hidden.
+async function entries(tabId) {
+  const media = await getMedia(tabId);
+  const streams = media.filter((m) => m.kind === 'hls');
+  const lists = await Promise.all(streams.map(hlsVariants));
+  const children = new Set();
+  streams.forEach((m, i) => (lists[i] || []).forEach((v) => {
+    if (v.url !== m.url) children.add(v.url);
+    if (v.audio_url) children.add(v.audio_url);
+  }));
+  const out = [];
+  streams.forEach((m, i) => {
+    if (children.has(m.url)) return;
+    if (!lists[i]) out.push({ url: m.url, kind: 'hls', label: 'Stream (HLS)' });
+    else for (const v of lists[i]) out.push({ url: m.url, kind: 'hls', label: v.label, audio: Boolean(v.audio_url), variant: v });
+  });
+  media.filter((m) => m.kind === 'file').sort((a, b) => (b.size || 0) - (a.size || 0))
+    .forEach((m) => out.push({ url: m.url, kind: 'file', label: fileLabel(m), size: m.size }));
+  return out;
+}
+
+async function downloadMedia(tabId, url, variant) {
   const item = (await getMedia(tabId)).find((m) => m.url === url);
   if (!item) return false;
   const headers = item.headers.length ? item.headers : await headersFor(url, item.pageUrl);
   // Stream URLs carry no useful name, so name HLS after the page title.
   const fileName = item.kind === 'hls' ? `${cleanTitle(item.title)}.ts` : null;
-  return sendToApp({ url, headers, file_name: fileName, kind: item.kind });
+  return sendToApp({
+    url: variant?.url || url,
+    headers,
+    file_name: fileName,
+    kind: item.kind,
+    audio_url: variant?.audio_url || null,
+  });
 }
 
 // ---- taking over browser downloads -----------------------------------------------------------
@@ -157,7 +213,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   const tabId = msg.tabId ?? sender.tab?.id;
   if (msg.type === 'get-media') getMedia(tabId).then(reply);
-  else if (msg.type === 'download-media') downloadMedia(tabId, msg.url).then(reply);
+  else if (msg.type === 'get-entries') entries(tabId).then(reply);
+  else if (msg.type === 'download-media') downloadMedia(tabId, msg.url, msg.variant).then(reply);
   else if (msg.type === 'status') appAlive().then(reply);
   else return false;
   return true; // reply is async

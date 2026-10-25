@@ -177,10 +177,39 @@ $('sidebar').addEventListener('click', (e) => {
 $('btn-add').onclick = () => { $('add-url').value = ''; $('dlg-add').showModal(); };
 $('dlg-add').addEventListener('close', async () => {
   if ($('dlg-add').returnValue !== 'ok') return;
-  const id = await invoke('add', { url: $('add-url').value });
+  const url = $('add-url').value.trim();
+  let job = { url };
+  if (/\.m3u8(\?|$)/i.test(url)) {
+    let variants;
+    try {
+      variants = await invoke('hls_variants', { url });
+    } catch (e) {
+      alert(`Could not read the playlist:\n${e}`);
+      return;
+    }
+    const v = variants.length > 1 ? await pickQuality(variants) : variants[0];
+    if (!v) return;
+    job = { url: v.url, kind: 'hls', audio_url: v.audio_url };
+  }
+  const id = await invoke('add', { job });
   selected.clear();
   selected.add(id);
 });
+
+// Resolves to the chosen variant, or null when cancelled. Best quality is preselected.
+function pickQuality(variants) {
+  $('q-list').innerHTML = variants.map((v, i) => `
+    <label><input type="radio" name="q" value="${i}"${i ? '' : ' checked'}>
+      <span>${esc(v.label)}</span>${v.audio_url ? '<small>separate audio, merged</small>' : ''}</label>`).join('');
+  const dlg = $('dlg-quality');
+  dlg.showModal();
+  return new Promise((resolve) => {
+    dlg.addEventListener('close', () => {
+      const checked = dlg.querySelector('input[name=q]:checked');
+      resolve(dlg.returnValue === 'ok' && checked ? variants[Number(checked.value)] : null);
+    }, { once: true });
+  });
+}
 $('btn-resume').onclick = () => invoke('resume', { ids: selectedIds() });
 $('btn-pause').onclick = () => invoke('pause', { ids: selectedIds() });
 $('btn-delete').onclick = () => {

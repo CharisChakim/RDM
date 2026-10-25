@@ -3,7 +3,7 @@
 mod server;
 mod store;
 
-use rdm_engine::{Handle, Kind, Outcome, Request};
+use rdm_engine::{Handle, Kind, Outcome, Request, Variant};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -166,13 +166,29 @@ fn emit(app: &AppHandle) {
     app.emit("downloads", views).ok();
 }
 
-pub fn add_download(
-    app: &AppHandle,
+/// A new download as asked for by the UI or the browser extension.
+#[derive(Deserialize)]
+pub struct Job {
     url: String,
+    #[serde(default)]
     headers: Vec<(String, String)>,
+    #[serde(default)]
     file_name: Option<String>,
-    kind: Kind,
-) -> u64 {
+    /// None = guess from the URL.
+    #[serde(default)]
+    kind: Option<Kind>,
+    /// HLS: separate audio track of the chosen quality.
+    #[serde(default)]
+    audio_url: Option<String>,
+}
+
+pub fn add_download(app: &AppHandle, job: Job) -> u64 {
+    let url = job.url.trim().to_string();
+    let kind = job.kind.unwrap_or(if url.split('?').next().unwrap_or("").ends_with(".m3u8") {
+        Kind::Hls
+    } else {
+        Kind::File
+    });
     let state = app.state::<App>();
     let id = {
         let mut data = state.data.lock().unwrap();
@@ -180,11 +196,12 @@ pub fn add_download(
         data.next_id += 1;
         let req = Request {
             url,
-            headers,
+            headers: job.headers,
             dir: data.settings.dir.clone(),
-            file_name,
+            file_name: job.file_name,
             connections: data.settings.connections,
             kind,
+            audio_url: job.audio_url,
         };
         data.entries.push(Entry {
             id,
@@ -207,10 +224,13 @@ pub fn add_download(
 }
 
 #[tauri::command]
-fn add(app: AppHandle, url: String) -> u64 {
-    let url = url.trim().to_string();
-    let kind = if url.split('?').next().unwrap_or("").ends_with(".m3u8") { Kind::Hls } else { Kind::File };
-    add_download(&app, url, vec![], None, kind)
+fn add(app: AppHandle, job: Job) -> u64 {
+    add_download(&app, job)
+}
+
+#[tauri::command]
+async fn hls_variants(state: State<'_, App>, url: String) -> Result<Vec<Variant>, String> {
+    rdm_engine::hls_variants(&state.client, url.trim(), &[]).await.map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -325,7 +345,7 @@ fn main() {
             tauri::async_runtime::spawn(server::run(handle));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![add, list, pause, resume, remove, open, get_settings, set_settings, pick_dir])
+        .invoke_handler(tauri::generate_handler![add, hls_variants, list, pause, resume, remove, open, get_settings, set_settings, pick_dir])
         .run(tauri::generate_context!())
         .expect("error while running RDM");
 }

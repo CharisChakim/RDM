@@ -4,27 +4,27 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use rdm_engine::Kind;
+use rdm_engine::Variant;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
+use crate::{App, Job};
+
 pub const PORT: u16 = 47123;
 
 #[derive(Deserialize)]
-struct NewDownload {
+struct Playlist {
     url: String,
     #[serde(default)]
     headers: Vec<(String, String)>,
-    file_name: Option<String>,
-    #[serde(default)]
-    kind: Kind,
 }
 
 pub async fn run(app: AppHandle) {
     let router = Router::new()
         .route("/ping", get(|| async { Json(json!({ "app": "rdm", "version": env!("CARGO_PKG_VERSION") })) }))
         .route("/download", post(download))
+        .route("/hls/variants", post(variants))
         .with_state(app);
     match tokio::net::TcpListener::bind(("127.0.0.1", PORT)).await {
         Ok(listener) => {
@@ -37,18 +37,34 @@ pub async fn run(app: AppHandle) {
 async fn download(
     State(app): State<AppHandle>,
     headers: HeaderMap,
-    Json(body): Json<NewDownload>,
+    Json(job): Json<Job>,
 ) -> Result<Json<Value>, StatusCode> {
     if !from_extension(&headers) {
         return Err(StatusCode::FORBIDDEN);
     }
-    let id = crate::add_download(&app, body.url, body.headers, body.file_name, body.kind);
+    let id = crate::add_download(&app, job);
     if let Some(w) = app.get_webview_window("main") {
         w.show().ok();
         w.unminimize().ok();
         w.set_focus().ok();
     }
     Ok(Json(json!({ "id": id })))
+}
+
+/// Qualities of an HLS playlist, fetched with the browser's own headers (cookies, referer).
+async fn variants(
+    State(app): State<AppHandle>,
+    headers: HeaderMap,
+    Json(body): Json<Playlist>,
+) -> Result<Json<Vec<Variant>>, (StatusCode, String)> {
+    if !from_extension(&headers) {
+        return Err((StatusCode::FORBIDDEN, String::new()));
+    }
+    let client = app.state::<App>().client.clone();
+    rdm_engine::hls_variants(&client, &body.url, &body.headers)
+        .await
+        .map(Json)
+        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("{e:#}")))
 }
 
 /// Web pages can POST to localhost too; browsers always attach their Origin, which pages cannot fake.

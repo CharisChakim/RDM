@@ -17,6 +17,7 @@ use std::time::Duration;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
+pub use hls::{variants as hls_variants, Variant};
 pub use reqwest::Client;
 
 const BUF_SIZE: usize = 1 << 20;
@@ -50,6 +51,9 @@ pub struct Request {
     pub connections: usize,
     #[serde(default)]
     pub kind: Kind,
+    /// HLS only: separate audio playlist to download and mux with the chosen video variant.
+    #[serde(default)]
+    pub audio_url: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]

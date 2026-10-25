@@ -81,10 +81,68 @@ async fn downloads_best_variant_with_encrypted_segments() {
         file_name: Some("out.ts".into()),
         connections: 4,
         kind: Kind::Hls,
+        audio_url: None,
     };
     let (h, task) = start(client(), req);
     let Outcome::Completed(path) = task.await.unwrap().unwrap() else { panic!("not completed") };
     assert_eq!(path, dir.join("out.ts"));
     assert!(std::fs::read(&path).unwrap() == expected, "content mismatch");
     assert_eq!(h.progress().pieces, Some([5, 5]));
+}
+
+fn random_segments(prefix: &str, n: usize, files: &mut HashMap<String, Vec<u8>>) -> (String, Vec<u8>) {
+    let mut playlist = String::from("#EXTM3U\n");
+    let mut all = Vec::new();
+    for i in 0..n {
+        let mut seg = vec![0u8; 30_000];
+        rand::thread_rng().fill_bytes(&mut seg);
+        all.extend_from_slice(&seg);
+        playlist.push_str(&format!("#EXTINF:4.0,\n{i}.ts\n"));
+        files.insert(format!("/{prefix}/{i}.ts"), seg);
+    }
+    playlist.push_str("#EXT-X-ENDLIST\n");
+    files.insert(format!("/{prefix}/index.m3u8"), playlist.into_bytes());
+    (format!("/{prefix}/index.m3u8"), all)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn offers_qualities_and_fetches_separate_audio() {
+    let mut files = HashMap::new();
+    let (_, _) = random_segments("v1080", 3, &mut files);
+    let (v360, video) = random_segments("v360", 3, &mut files);
+    let (_, audio) = random_segments("aud", 2, &mut files);
+    files.insert(
+        "/master.m3u8".into(),
+        b"#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a\",NAME=\"en\",DEFAULT=YES,URI=\"aud/index.m3u8\"\n\
+          #EXT-X-STREAM-INF:BANDWIDTH=900000,RESOLUTION=640x360,AUDIO=\"a\"\nv360/index.m3u8\n\
+          #EXT-X-STREAM-INF:BANDWIDTH=6000000,RESOLUTION=1920x1080,AUDIO=\"a\"\nv1080/index.m3u8\n"
+            .to_vec(),
+    );
+    let base = serve(files).await;
+
+    let variants = rdm_engine::hls_variants(&client(), &format!("{base}/master.m3u8"), &[]).await.unwrap();
+    let labels: Vec<_> = variants.iter().map(|v| v.label.as_str()).collect();
+    assert_eq!(labels, ["1080p · 6.0 Mbps", "360p · 900 kbps"]);
+    let chosen = &variants[1];
+    assert_eq!(chosen.url, format!("{base}{v360}"));
+
+    let dir = std::env::temp_dir().join(format!("rdm-hls-{}", rand::random::<u32>()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let req = Request {
+        url: chosen.url.clone(),
+        headers: vec![],
+        dir: dir.clone(),
+        file_name: Some("clip.ts".into()),
+        connections: 4,
+        kind: Kind::Hls,
+        audio_url: chosen.audio_url.clone(),
+    };
+    let (h, task) = start(client(), req);
+    let Outcome::Completed(path) = task.await.unwrap().unwrap() else { panic!("not completed") };
+    assert_eq!(h.progress().pieces, Some([5, 5]));
+    // Random bytes are not real media, so ffmpeg can't mux them: both tracks must be kept side by side.
+    assert_eq!(path, dir.join("clip.video.ts"));
+    assert!(std::fs::read(&path).unwrap() == video, "video mismatch");
+    assert!(std::fs::read(dir.join("clip.audio.ts")).unwrap() == audio, "audio mismatch");
+    assert!(!dir.join("clip.mp4").exists());
 }

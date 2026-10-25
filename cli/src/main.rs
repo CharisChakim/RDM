@@ -32,7 +32,7 @@ async fn main() -> anyhow::Result<()> {
         .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
         .collect();
     let kind = if args.url.split('?').next().unwrap_or("").ends_with(".m3u8") { Kind::Hls } else { Kind::File };
-    let req = Request { url: args.url, headers, dir: args.dir, file_name: args.output, connections: args.connections, kind };
+    let req = Request { url: args.url, headers, dir: args.dir, file_name: args.output, connections: args.connections, kind, audio_url: None };
 
     let t0 = Instant::now();
     let (handle, mut task) = start(client(), req);

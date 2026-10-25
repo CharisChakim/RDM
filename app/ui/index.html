@@ -67,7 +67,15 @@
     <form method="dialog">
       <h3>Add URL</h3>
       <input id="add-url" type="url" placeholder="https://example.com/file.zip" required autofocus>
-      <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Download</button></menu>
+      <menu><button type="button" onclick="this.closest('dialog').close('cancel')">Cancel</button><button value="ok" class="primary">Download</button></menu>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-quality">
+    <form method="dialog">
+      <h3>Choose quality</h3>
+      <div id="q-list" class="qlist"></div>
+      <menu><button type="button" onclick="this.closest('dialog').close('cancel')">Cancel</button><button value="ok" class="primary">Download</button></menu>
     </form>
   </dialog>
 
@@ -80,7 +88,7 @@
       <label>Connections per download (1–32)
         <input id="set-conn" type="number" min="1" max="32">
       </label>
-      <menu><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">Save</button></menu>
+      <menu><button type="button" onclick="this.closest('dialog').close('cancel')">Cancel</button><button value="ok" class="primary">Save</button></menu>
     </form>
   </dialog>
 

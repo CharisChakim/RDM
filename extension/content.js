@@ -7,14 +7,9 @@
   chrome.runtime.onMessage.addListener((m) => { if (m.type === 'media-updated') refresh(); });
   refresh();
 
-  const size = (b) => (b ? `${(b / 1048576).toFixed(1)} MB` : '');
-  const label = (m) => {
-    let name = '';
-    try { name = decodeURIComponent(new URL(m.url).pathname.split('/').pop()); } catch {}
-    return `${m.kind === 'hls' ? 'Stream (HLS)' : (m.mime.split(';')[0] || 'media')} · ${name.slice(0, 40)} ${size(m.size)}`;
-  };
-  // Streams first (they are the real video on most sites), then biggest files.
-  const ordered = () => [...media].sort((a, b) => (b.kind === 'hls') - (a.kind === 'hls') || (b.size || 0) - (a.size || 0));
+  const size = (b) => (b ? ` ${(b / 1048576).toFixed(1)} MB` : '');
+  // Entries come from the background: streams (one per quality) first, then files.
+  const label = (e) => (e.kind === 'hls' ? `Video ${e.label}${e.audio ? ' + audio' : ''}` : `${e.label}${size(e.size)}`);
 
   function ui() {
     if (host) return;
@@ -31,26 +26,29 @@
     </style><button id="b">&#11015; Download this video</button><div id="m"></div>`;
     btn = root.getElementById('b');
     menu = root.getElementById('m');
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      const list = ordered();
-      if (list.length === 1) return send(list[0].url);
+      if (menu.style.display === 'block') { menu.style.display = 'none'; return; }
+      btn.textContent = '… Reading qualities';
+      const list = (await chrome.runtime.sendMessage({ type: 'get-entries' }).catch(() => null)) || [];
+      btn.innerHTML = '&#11015; Download this video';
+      if (list.length === 1) return send(list[0]);
       menu.innerHTML = '';
-      for (const m of list) {
+      for (const entry of list) {
         const a = document.createElement('a');
-        a.textContent = label(m);
-        a.title = m.url;
-        a.onclick = (ev) => { ev.stopPropagation(); send(m.url); };
+        a.textContent = label(entry);
+        a.title = entry.variant?.url || entry.url;
+        a.onclick = (ev) => { ev.stopPropagation(); send(entry); };
         menu.appendChild(a);
       }
-      menu.style.display = menu.style.display === 'block' ? 'none' : 'block';
+      menu.style.display = 'block';
     });
     host.addEventListener('mouseenter', () => clearTimeout(hideTimer));
     document.documentElement.appendChild(host);
   }
 
-  function send(url) {
-    chrome.runtime.sendMessage({ type: 'download-media', url }).then((ok) => {
+  function send(entry) {
+    chrome.runtime.sendMessage({ type: 'download-media', url: entry.url, variant: entry.variant }).then((ok) => {
       btn.textContent = ok ? '✔ Sent to RDM' : '✖ RDM is not running';
       setTimeout(() => { btn.innerHTML = '&#11015; Download this video'; }, 2000);
     });

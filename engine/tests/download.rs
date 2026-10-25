@@ -76,7 +76,7 @@ fn temp_dir() -> PathBuf {
 }
 
 fn request(url: &str, dir: &PathBuf, connections: usize) -> Request {
-    Request { url: url.into(), headers: vec![], dir: dir.clone(), file_name: None, connections, kind: Kind::File }
+    Request { url: url.into(), headers: vec![], dir: dir.clone(), file_name: None, connections, kind: Kind::File, audio_url: None }
 }
 
 #[tokio::test(flavor = "multi_thread")]
