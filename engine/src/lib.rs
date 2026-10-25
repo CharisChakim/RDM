@@ -24,8 +24,9 @@ const MIN_SPLIT: u64 = 1 << 20;
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_RETRIES: u32 = 5;
 const UNKNOWN: u64 = u64::MAX;
-const DEFAULT_UA: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
+// An honest UA: servers with bot detection drop requests that claim to be Chrome but lack
+// Chrome's other headers. Browser hand-offs send the browser's real UA anyway.
+const DEFAULT_UA: &str = concat!("RDM/", env!("CARGO_PKG_VERSION"));
 
 pub fn client() -> Client {
     Client::builder()
