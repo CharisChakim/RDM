@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "RDM Integration",
+  "version": "0.1.0",
+  "description": "Sends browser downloads and detected videos to RDM (Rust Download Manager).",
+  "permissions": ["webRequest", "downloads", "cookies", "tabs", "storage", "contextMenus"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "RDM" },
+  "content_scripts": [
+    { "matches": ["http://*/*", "https://*/*"], "js": ["content.js"], "run_at": "document_idle", "all_frames": true }
+  ],
+  "icons": { "128": "icon128.png" }
+}

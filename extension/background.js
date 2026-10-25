@@ -1,0 +1,164 @@
+// RDM browser integration. Same shape as IDM's extension: a thin sensor that records what the
+// browser actually sent, spots downloads and media, and hands them to the desktop app.
+
+const API = 'http://127.0.0.1:47123';
+const MIN_MEDIA_BYTES = 256 * 1024;
+// Headers the engine sets itself (or that would break ranged requests).
+const SKIP_HEADERS = new Set(['host', 'connection', 'content-length', 'range', 'if-range', 'accept-encoding',
+  'if-none-match', 'if-modified-since']);
+
+// URL -> { method, headers } for recent requests, exactly as sent (extraHeaders includes Cookie).
+const recent = new Map();
+function remember(url, rec) {
+  recent.delete(url);
+  recent.set(url, rec);
+  if (recent.size > 400) recent.delete(recent.keys().next().value);
+}
+
+chrome.webRequest.onBeforeSendHeaders.addListener((d) => {
+  const headers = d.requestHeaders
+    .filter((h) => !SKIP_HEADERS.has(h.name.toLowerCase()))
+    .map((h) => [h.name, h.value ?? '']);
+  remember(d.url, { method: d.method, headers });
+}, { urls: ['<all_urls>'] }, ['requestHeaders', 'extraHeaders']);
+
+// ---- media detection -------------------------------------------------------------------------
+
+function classify(url, contentType) {
+  const mime = contentType.split(';')[0].trim().toLowerCase();
+  let path;
+  try { path = new URL(url).pathname.toLowerCase(); } catch { return null; }
+  if (mime.includes('mpegurl') || path.endsWith('.m3u8')) return 'hls';
+  // Pieces of a stream, not something to download on their own.
+  if (mime === 'video/mp2t' || mime === 'video/iso.segment' || /\.(ts|m4s)$/.test(path)) return null;
+  if (/^(video|audio)\//.test(mime)) return 'file';
+  if (mime === 'application/octet-stream' && /\.(mp4|webm|mkv|mov|m4v|mp3|m4a|ogg|opus|flac)$/.test(path)) return 'file';
+  return null;
+}
+
+function totalSize(h) {
+  const range = /\/(\d+)\s*$/.exec(h['content-range'] || '');
+  if (range) return Number(range[1]);
+  return h['content-length'] ? Number(h['content-length']) : null;
+}
+
+chrome.webRequest.onHeadersReceived.addListener((d) => {
+  if (d.tabId < 0 || (d.statusCode !== 200 && d.statusCode !== 206)) return;
+  const h = Object.fromEntries((d.responseHeaders || []).map((x) => [x.name.toLowerCase(), x.value || '']));
+  const kind = classify(d.url, h['content-type'] || '');
+  if (!kind) return;
+  const size = kind === 'file' ? totalSize(h) : null;
+  if (size !== null && size < MIN_MEDIA_BYTES) return;
+  addMedia(d.tabId, { url: d.url, kind, mime: h['content-type'] || '', size, headers: recent.get(d.url)?.headers || [] });
+}, { urls: ['<all_urls>'] }, ['responseHeaders']);
+
+// Per-tab media lists live in session storage so they survive the service worker sleeping.
+const key = (tabId) => `media:${tabId}`;
+async function getMedia(tabId) {
+  return (await chrome.storage.session.get(key(tabId)))[key(tabId)] || [];
+}
+
+let chain = Promise.resolve(); // serialize read-modify-write of the lists
+function addMedia(tabId, item) {
+  chain = chain.then(async () => {
+    const list = await getMedia(tabId);
+    if (list.some((m) => m.url === item.url)) return;
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    item.title = tab?.title || '';
+    item.pageUrl = tab?.url || '';
+    list.push(item);
+    await chrome.storage.session.set({ [key(tabId)]: list.slice(-30) });
+    chrome.action.setBadgeText({ tabId, text: String(Math.min(list.length, 30)) });
+    chrome.tabs.sendMessage(tabId, { type: 'media-updated' }).catch(() => {});
+  }).catch(() => {});
+}
+
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  if (info.url) chain = chain.then(() => chrome.storage.session.remove(key(tabId))).catch(() => {});
+});
+chrome.tabs.onRemoved.addListener((tabId) => { chrome.storage.session.remove(key(tabId)); });
+
+// ---- talking to the app ----------------------------------------------------------------------
+
+async function sendToApp(payload) {
+  try {
+    const r = await fetch(`${API}/download`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function appAlive() {
+  try {
+    return (await fetch(`${API}/ping`)).ok;
+  } catch {
+    return false;
+  }
+}
+
+// Recorded headers if we saw the request, otherwise rebuild the important ones.
+async function headersFor(url, referrer) {
+  const rec = recent.get(url);
+  if (rec?.headers.length) return rec.headers;
+  const headers = [['User-Agent', navigator.userAgent]];
+  if (referrer) headers.push(['Referer', referrer]);
+  const cookies = await chrome.cookies.getAll({ url }).catch(() => []);
+  if (cookies.length) headers.push(['Cookie', cookies.map((c) => `${c.name}=${c.value}`).join('; ')]);
+  return headers;
+}
+
+function cleanTitle(t) {
+  return (t || 'video').replace(/^\(\d+\)\s*/, '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').trim().slice(0, 120) || 'video';
+}
+
+async function downloadMedia(tabId, url) {
+  const item = (await getMedia(tabId)).find((m) => m.url === url);
+  if (!item) return false;
+  const headers = item.headers.length ? item.headers : await headersFor(url, item.pageUrl);
+  // Stream URLs carry no useful name, so name HLS after the page title.
+  const fileName = item.kind === 'hls' ? `${cleanTitle(item.title)}.ts` : null;
+  return sendToApp({ url, headers, file_name: fileName, kind: item.kind });
+}
+
+// ---- taking over browser downloads -----------------------------------------------------------
+
+chrome.downloads.onCreated.addListener(async (item) => {
+  const { capture = true } = await chrome.storage.local.get('capture');
+  const url = item.finalUrl || item.url;
+  if (!capture || item.state !== 'in_progress' || !/^https?:/i.test(url)) return;
+  // A form POST can't be replayed as a GET; leave those to the browser.
+  if (recent.get(url)?.method === 'POST') return;
+  if (!(await appAlive())) return;
+  await chrome.downloads.pause(item.id).catch(() => {});
+  if (await sendToApp({ url, headers: await headersFor(url, item.referrer), file_name: null })) {
+    await chrome.downloads.cancel(item.id).catch(() => {});
+    chrome.downloads.erase({ id: item.id });
+  } else {
+    chrome.downloads.resume(item.id).catch(() => {});
+  }
+});
+
+// ---- context menu, popup and content-script messages -----------------------------------------
+
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.create({ id: 'rdm', title: 'Download with RDM', contexts: ['link', 'video', 'audio', 'image'] });
+});
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  const url = info.linkUrl || info.srcUrl;
+  if (url && /^https?:/i.test(url)) sendToApp({ url, headers: await headersFor(url, tab?.url), file_name: null });
+});
+
+chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+  const tabId = msg.tabId ?? sender.tab?.id;
+  if (msg.type === 'get-media') getMedia(tabId).then(reply);
+  else if (msg.type === 'download-media') downloadMedia(tabId, msg.url).then(reply);
+  else if (msg.type === 'status') appAlive().then(reply);
+  else return false;
+  return true; // reply is async
+});

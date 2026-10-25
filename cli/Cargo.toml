@@ -1,0 +1,14 @@
+[package]
+name = "rdm-cli"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "rdm"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+rdm-engine = { path = "../engine" }
+tokio = { version = "1", features = ["full"] }
