@@ -1,12 +1,14 @@
 # RDM: Rust Download Manager
 
-A personal IDM-style download manager: a multi-connection Rust engine, a Tauri desktop UI, and a Chrome/Edge extension that takes over browser downloads and detects videos.
+A personal IDM-style download manager: a multi-connection Rust engine, a native desktop UI, and a Chrome/Edge extension that takes over browser downloads and detects videos.
 
 ```
 engine/      download engine (library) + tests
+core/        download list, persistence, localhost API for the extension, yt-dlp resolver
+desktop/     native Windows app: Slint UI (software renderer, no browser engine), tray, autostart
 cli/         `rdm` command-line front end, used for benchmarks
-app/         Tauri v2 desktop app (src-tauri/ = Rust, ui/ = HTML/JS)
 extension/   Chrome/Edge MV3 extension
+installer/   NSIS script for the per-user installer
 bench/       IDM vs RDM benchmark script + local test server (Range, per-connection throttle)
 ```
 
@@ -30,31 +32,35 @@ cargo run --release -p rdm-cli -- https://example.com/file.zip -c 8 -d .
 ```
 
 ```bash
-cargo run --release -p rdm-app
+cargo run --release -p rdm-desktop
 ```
 
-To build an installer (NSIS), run this from `app/`. The result is `target/release/bundle/nsis/RDM_<version>_x64-setup.exe`:
+To build the per-user installer (`target/release/RDM_<version>_x64-setup.exe`), build the app and then run NSIS (`winget install NSIS.NSIS`):
 
 ```bash
-npx tauri build
+makensis installer/rdm.nsi
 ```
 
-Use the release build or the installed app. `target/debug/rdm-app.exe` opens a console window on purpose, for logs.
+Use the release build or the installed app. The debug build (`target/debug/RDM.exe`) opens a console window on purpose, for logs.
+
+`RDM.exe <url>` works like `IDMan.exe /d <url>`: the URL goes through Add URL, including the quality picker for streams and video pages. If RDM is already running, it hands the URL to the running copy.
 
 ### Background use
 
 The extension only works while RDM is running, so RDM lives in the tray:
-- **Closing the window keeps RDM running.** The window is destroyed along with its WebView2 processes, leaving only the download engine. To exit, use **Quit** in the tray icon's menu.
+- **Closing the window keeps RDM running.** To exit, use **Quit** in the tray icon's menu.
 - **Start with Windows** (on by default, toggle it in Options) launches RDM with `--hidden`, straight into the tray without a window.
 - **Single instance.** Launching RDM again just shows the running one.
 
-Measured idle footprint (private memory / CPU):
+Measured idle footprint (private memory / CPU). The UI is Slint with its software renderer, so there's no WebView or GPU process:
 
 | | RDM | IDM 6.42 |
 |---|---|---|
 | Started with Windows, tray only | 3 MB / 0% | 11 MB / 0% |
-| Window closed to tray | 5 MB / 0% | — |
-| Window open | ~99 MB / 0.2% (WebView2 UI) | — |
+| Window open | 7 MB / 0% | 11 MB / 0% |
+| Window closed to tray | 7 MB / 0% | — |
+
+The earlier WebView2 UI (Tauri) needed about 99 MB with the window open.
 
 The app listens on `127.0.0.1:47123` for the extension. It rejects requests that carry a web page `Origin`.
 

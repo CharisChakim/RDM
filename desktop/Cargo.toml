@@ -1,0 +1,22 @@
+[package]
+name = "rdm-desktop"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "RDM"
+path = "src/main.rs"
+
+[dependencies]
+arboard = { version = "3", default-features = false }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+dirs = "6"
+rdm-core = { path = "../core" }
+rfd = "0.15"
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software", "unstable-winit-030"] }
+tray-icon = "0.21"
+winreg = "0.55"
+
+[build-dependencies]
+slint-build = "1.18"
+winresource = "0.1"

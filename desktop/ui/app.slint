@@ -1,0 +1,531 @@
+import { Button, LineEdit, CheckBox, SpinBox, ListView, Palette } from "std-widgets.slint";
+
+export struct Row {
+    id: int,
+    name: string,
+    size: string,
+    status: string,
+    // 0 downloading, 1 paused, 2 completed, 3 error
+    kind: int,
+    pct: float,
+    bar: bool,
+    left: string,
+    rate: string,
+    conns: string,
+    added: string,
+    tip: string,
+    selected: bool,
+}
+
+export struct Category {
+    key: string,
+    label: string,
+    count: string,
+    header: bool,
+}
+
+// Fractions of the detail bar: segment start, received width, full width.
+export struct Seg {
+    x: float,
+    done: float,
+}
+
+export struct Quality {
+    label: string,
+    note: string,
+}
+
+global Theme {
+    out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
+    out property <color> muted: dark ? #8b95a5 : #687385;
+    out property <color> hover: dark ? #222a34 : #f0f4fa;
+    out property <color> selected: dark ? #1e3150 : #dbe8fd;
+    out property <color> accent: dark ? #4c8dff : #1f6feb;
+    out property <color> line: dark ? #2b323c : #e1e5eb;
+    out property <color> panel: dark ? #1b2027 : #ffffff;
+    out property <color> page: dark ? #14181e : #f4f6f9;
+    out property <color> bar-bg: dark ? #262d37 : #e6ebf1;
+    out property <color> bar-fill: dark ? #3b82f6 : #2f81f7;
+    out property <color> bar-edge: dark ? #93c5fd : #0b4fb3;
+    out property <color> ok: dark ? #3fb950 : #1a7f37;
+    out property <color> warn: dark ? #d29922 : #9a6700;
+    out property <color> err: dark ? #f85149 : #cf222e;
+}
+
+component ToolButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> text;
+    in property <bool> enabled: true;
+    in property <bool> primary;
+    callback clicked;
+    min-width: 66px;
+    height: 54px;
+    border-radius: 6px;
+    background: ta.has-hover && root.enabled ? Theme.hover : transparent;
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+    VerticalLayout {
+        alignment: center;
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 3px;
+        HorizontalLayout {
+            alignment: center;
+            Image {
+                source: root.icon;
+                width: 22px;
+                height: 22px;
+                colorize: root.primary ? Theme.accent : Palette.foreground;
+                opacity: root.enabled ? 1 : 0.35;
+            }
+        }
+        Text {
+            text: root.text;
+            font-size: 12px;
+            horizontal-alignment: center;
+            color: Palette.foreground;
+            opacity: root.enabled ? 1 : 0.4;
+        }
+    }
+}
+
+component Cell inherits Text {
+    vertical-alignment: center;
+    overflow: elide;
+    color: Palette.foreground;
+}
+
+component RowView inherits Rectangle {
+    in property <Row> entry;
+    in property <bool> narrow;
+    callback pressed(int, bool, bool);
+    callback activated(int);
+    height: 28px;
+    background: root.entry.selected ? Theme.selected : ta.has-hover ? Theme.hover : transparent;
+    ta := TouchArea {
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                root.pressed(root.entry.id, e.modifiers.control, e.modifiers.shift);
+            }
+        }
+        double-clicked => { root.activated(root.entry.id); }
+    }
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 8px;
+        Cell { text: root.entry.name; horizontal-stretch: 1; min-width: 80px; }
+        Cell { text: root.entry.size; width: 76px; }
+        HorizontalLayout {
+            width: 142px;
+            spacing: 6px;
+            alignment: start;
+            Cell {
+                text: root.entry.status;
+                color: root.entry.kind == 2 ? Theme.ok : root.entry.kind == 1 ? Theme.warn : root.entry.kind == 3 ? Theme.err : Palette.foreground;
+            }
+            if root.entry.bar: VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    height: 6px;
+                    width: 60px;
+                    border-radius: 3px;
+                    background: Theme.bar-bg;
+                    clip: true;
+                    Rectangle {
+                        x: 0;
+                        width: parent.width * root.entry.pct;
+                        background: Theme.bar-fill;
+                    }
+                }
+            }
+        }
+        if !root.narrow: Cell { text: root.entry.left; width: 76px; }
+        Cell { text: root.entry.rate; width: 96px; }
+        if !root.narrow: Cell { text: root.entry.conns; width: 48px; }
+        Cell { text: root.entry.added; width: 116px; }
+    }
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.line;
+    }
+}
+
+component HeaderCell inherits Text {
+    vertical-alignment: center;
+    font-size: 12px;
+    font-weight: 600;
+    color: Theme.muted;
+    overflow: elide;
+}
+
+component SideItem inherits Rectangle {
+    in property <Category> item;
+    in property <bool> active;
+    callback chosen(string);
+    height: self.item.header ? 30px : 28px;
+    background: root.active ? Theme.selected : ta.has-hover && !root.item.header ? Theme.hover : transparent;
+    ta := TouchArea {
+        enabled: !root.item.header;
+        mouse-cursor: pointer;
+        clicked => { root.chosen(root.item.key); }
+    }
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        Text {
+            text: root.item.label;
+            vertical-alignment: root.item.header ? bottom : center;
+            font-size: root.item.header ? 11px : 13px;
+            font-weight: root.active ? 600 : 400;
+            color: root.item.header ? Theme.muted : root.active ? Theme.accent : Palette.foreground;
+            horizontal-stretch: 1;
+        }
+        Text {
+            text: root.item.count;
+            vertical-alignment: center;
+            color: Theme.muted;
+        }
+    }
+}
+
+component Modal inherits Rectangle {
+    in property <string> title;
+    in property <length> card-width: 520px;
+    background: #00000059;
+    TouchArea { }
+    Rectangle {
+        width: min(root.card-width, root.width - 40px);
+        height: body.preferred-height;
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        background: Theme.panel;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: Theme.line;
+        body := VerticalLayout {
+            padding: 18px;
+            spacing: 12px;
+            Text {
+                text: root.title;
+                font-size: 16px;
+                font-weight: 600;
+                color: Palette.foreground;
+            }
+            @children
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "RDM - Rust Download Manager";
+    icon: @image-url("icons/app.png");
+    preferred-width: 1120px;
+    preferred-height: 660px;
+    min-width: 760px;
+    min-height: 420px;
+    default-font-family: "Segoe UI";
+    default-font-size: 13px;
+    background: Theme.page;
+
+    in property <[Row]> rows;
+    in property <[Category]> categories;
+    in property <string> filter: "all";
+    in property <string> totals;
+    in property <bool> can-resume;
+    in property <bool> can-stop;
+    in property <bool> can-delete;
+    in property <bool> can-open-folder;
+    in property <bool> empty;
+
+    in property <bool> detail;
+    in property <string> d-name;
+    in property <string> d-stats;
+    in property <string> d-url;
+    in property <string> d-path;
+    in property <[Seg]> segs;
+
+    // "", "add", "quality", "options", "delete"
+    in-out property <string> dialog;
+    in-out property <string> add-url;
+    in property <string> quality-title;
+    in property <[Quality]> qualities;
+    in-out property <int> quality-index;
+    in property <string> quality-message;
+    in-out property <string> opt-dir;
+    in-out property <int> opt-conns;
+    in-out property <bool> opt-autostart;
+    in property <int> delete-count;
+
+    callback row-pressed(int, bool, bool);
+    callback row-activated(int);
+    callback filter-chosen(string);
+    callback add-clicked();
+    callback add-submit(string);
+    callback quality-accept(int);
+    callback resume-clicked();
+    callback stop-clicked();
+    callback delete-clicked();
+    callback delete-confirm(bool);
+    callback clean-clicked();
+    callback folder-clicked();
+    callback options-clicked();
+    callback options-save();
+    callback browse-clicked();
+    callback select-all();
+    callback paste();
+
+    // Narrow windows drop Time Left and Conn. so the file name keeps its room. Updated on resize
+    // rather than bound, because the columns themselves feed into the window's minimum width.
+    property <bool> narrow: false;
+    changed width => {
+        self.narrow = self.width < 1000px;
+    }
+
+    // Keyboard shortcuts for the list, like IDM: Delete, Ctrl+A, Ctrl+V (paste a URL to add it).
+    keys := FocusScope {
+        key-pressed(e) => {
+            if (root.dialog != "") {
+                if (e.text == Key.Escape) {
+                    root.dialog = "";
+                    return accept;
+                }
+                return reject;
+            }
+            if (e.text == Key.Delete) {
+                root.delete-clicked();
+                return accept;
+            }
+            if (e.modifiers.control && (e.text == "a" || e.text == "A")) {
+                root.select-all();
+                return accept;
+            }
+            if (e.modifiers.control && (e.text == "v" || e.text == "V")) {
+                root.paste();
+                return accept;
+            }
+            reject
+        }
+
+        VerticalLayout {
+            // toolbar
+            Rectangle {
+                background: Theme.panel;
+                HorizontalLayout {
+                    padding: 6px;
+                    spacing: 2px;
+                    ToolButton { icon: @image-url("icons/add.svg"); text: "Add URL"; primary: true; clicked => { root.add-clicked(); } }
+                    ToolButton { icon: @image-url("icons/play.svg"); text: "Resume"; enabled: root.can-resume; clicked => { root.resume-clicked(); } }
+                    ToolButton { icon: @image-url("icons/pause.svg"); text: "Stop"; enabled: root.can-stop; clicked => { root.stop-clicked(); } }
+                    ToolButton { icon: @image-url("icons/trash.svg"); text: "Delete"; enabled: root.can-delete; clicked => { root.delete-clicked(); } }
+                    ToolButton { icon: @image-url("icons/clean.svg"); text: "Delete Completed"; clicked => { root.clean-clicked(); } }
+                    ToolButton { icon: @image-url("icons/folder.svg"); text: "Open Folder"; enabled: root.can-open-folder; clicked => { root.folder-clicked(); } }
+                    Rectangle { horizontal-stretch: 1; }
+                    Text { text: root.totals; vertical-alignment: center; color: Theme.muted; }
+                    Rectangle { width: 12px; }
+                    ToolButton { icon: @image-url("icons/gear.svg"); text: "Options"; clicked => { root.options-clicked(); } }
+                }
+                Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+            }
+
+            HorizontalLayout {
+                vertical-stretch: 1;
+                // sidebar
+                Rectangle {
+                    width: 170px;
+                    background: Theme.panel;
+                    VerticalLayout {
+                        padding-top: 4px;
+                        alignment: start;
+                        for c in root.categories: SideItem {
+                            item: c;
+                            active: c.key == root.filter;
+                            chosen(key) => { root.filter-chosen(key); }
+                        }
+                    }
+                    Rectangle { x: parent.width - 1px; width: 1px; background: Theme.line; }
+                }
+                // list
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: Theme.panel;
+                    VerticalLayout {
+                        Rectangle {
+                            height: 30px;
+                            HorizontalLayout {
+                                padding-left: 8px;
+                                padding-right: 8px;
+                                spacing: 8px;
+                                HeaderCell { text: "File Name"; horizontal-stretch: 1; min-width: 80px; }
+                                HeaderCell { text: "Size"; width: 76px; }
+                                HeaderCell { text: "Status"; width: 142px; }
+                                if !root.narrow: HeaderCell { text: "Time Left"; width: 76px; }
+                                HeaderCell { text: "Transfer Rate"; width: 96px; }
+                                if !root.narrow: HeaderCell { text: "Conn."; width: 48px; }
+                                HeaderCell { text: "Added"; width: 116px; }
+                            }
+                            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+                        }
+                        ListView {
+                            vertical-stretch: 1;
+                            for r in root.rows: RowView {
+                                entry: r;
+                                narrow: root.narrow;
+                                pressed(id, ctrl, shift) => {
+                                    keys.focus();
+                                    root.row-pressed(id, ctrl, shift);
+                                }
+                                activated(id) => { root.row-activated(id); }
+                            }
+                        }
+                    }
+                    if root.empty: Text {
+                        y: 80px;
+                        width: parent.width;
+                        horizontal-alignment: center;
+                        text: "No downloads yet. Click Add URL or download something in your browser.";
+                        color: Theme.muted;
+                    }
+                }
+            }
+
+            // details of the selected download, with IDM's per-connection bar
+            if root.detail: Rectangle {
+                vertical-stretch: 0;
+                background: Theme.panel;
+                Rectangle { y: 0; height: 1px; background: Theme.line; }
+                VerticalLayout {
+                    padding: 10px;
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 6px;
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Text { text: root.d-name; font-weight: 600; overflow: elide; horizontal-stretch: 1; color: Palette.foreground; }
+                        Text { text: root.d-stats; color: Theme.muted; }
+                    }
+                    Rectangle {
+                        height: 18px;
+                        border-radius: 3px;
+                        background: Theme.bar-bg;
+                        clip: true;
+                        for s in root.segs: Rectangle {
+                            x: parent.width * s.x;
+                            width: parent.width * s.done;
+                            background: Theme.bar-fill;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Text { text: root.d-url; font-size: 12px; color: Theme.muted; overflow: elide; horizontal-stretch: 1; }
+                        Text { text: root.d-path; font-size: 12px; color: Theme.muted; overflow: elide; horizontal-stretch: 1; horizontal-alignment: right; }
+                    }
+                }
+            }
+        }
+    }
+
+    if root.dialog == "add": Modal {
+        title: "Add URL";
+        url := LineEdit {
+            placeholder-text: "https://example.com/file.zip or a YouTube link";
+            text <=> root.add-url;
+            init => { self.focus(); }
+            accepted => { root.add-submit(self.text); }
+        }
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+            Button { text: "Cancel"; clicked => { root.dialog = ""; keys.focus(); } }
+            Button { text: "Download"; primary: true; clicked => { root.add-submit(url.text); } }
+        }
+    }
+
+    if root.dialog == "quality": Modal {
+        title: root.quality-title;
+        if root.quality-message != "": Text {
+            text: root.quality-message;
+            color: Theme.muted;
+            wrap: word-wrap;
+        }
+        if root.qualities.length > 0: Rectangle {
+            border-width: 1px;
+            border-color: Theme.line;
+            border-radius: 6px;
+            height: min(root.qualities.length * 36px, 320px);
+            clip: true;
+            ListView {
+                for q[i] in root.qualities: Rectangle {
+                    height: 36px;
+                    background: i == root.quality-index ? Theme.selected : qa.has-hover ? Theme.hover : transparent;
+                    qa := TouchArea {
+                        clicked => { root.quality-index = i; }
+                        double-clicked => { root.quality-accept(i); }
+                    }
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 10px;
+                        Text { text: i == root.quality-index ? "\u{25C9}" : "\u{25CB}"; vertical-alignment: center; color: Theme.accent; }
+                        Text { text: q.label; vertical-alignment: center; horizontal-stretch: 1; color: Palette.foreground; }
+                        Text { text: q.note; vertical-alignment: center; font-size: 12px; color: Theme.muted; }
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+            Button { text: "Cancel"; clicked => { root.dialog = ""; keys.focus(); } }
+            Button {
+                text: "Download";
+                primary: true;
+                enabled: root.qualities.length > 0;
+                clicked => { root.quality-accept(root.quality-index); }
+            }
+        }
+    }
+
+    if root.dialog == "options": Modal {
+        title: "Options";
+        Text { text: "Save to"; color: Theme.muted; }
+        HorizontalLayout {
+            spacing: 6px;
+            LineEdit { text <=> root.opt-dir; horizontal-stretch: 1; }
+            Button { text: "Browse\u{2026}"; clicked => { root.browse-clicked(); } }
+        }
+        Text { text: "Connections per download (1\u{2013}32)"; color: Theme.muted; }
+        SpinBox { minimum: 1; maximum: 32; value <=> root.opt-conns; }
+        CheckBox { text: "Start with Windows (in the tray, so the browser extension always works)"; checked <=> root.opt-autostart; }
+        Text {
+            text: "Closing this window keeps RDM running in the tray. Use the tray icon's Quit to exit.";
+            font-size: 12px;
+            color: Theme.muted;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+            Button { text: "Cancel"; clicked => { root.dialog = ""; keys.focus(); } }
+            Button { text: "Save"; primary: true; clicked => { root.options-save(); } }
+        }
+    }
+
+    if root.dialog == "delete": Modal {
+        title: "Delete " + root.delete-count + (root.delete-count == 1 ? " download?" : " downloads?");
+        Text { text: "Remove from the list only, or also delete the files from disk?"; color: Palette.foreground; wrap: word-wrap; }
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+            Button { text: "Cancel"; clicked => { root.dialog = ""; keys.focus(); } }
+            Button { text: "Remove from list"; clicked => { root.delete-confirm(false); } }
+            Button { text: "Delete files too"; primary: true; clicked => { root.delete-confirm(true); } }
+        }
+    }
+
+    init => { keys.focus(); }
+}

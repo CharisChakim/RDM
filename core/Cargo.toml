@@ -1,0 +1,12 @@
+[package]
+name = "rdm-core"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+rdm-engine = { path = "../engine" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
