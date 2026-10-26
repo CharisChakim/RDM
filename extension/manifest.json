@@ -6,9 +6,13 @@
   "permissions": ["webRequest", "downloads", "cookies", "tabs", "storage", "contextMenus"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background.js" },
-  "action": { "default_popup": "popup.html", "default_title": "RDM" },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "RDM",
+    "default_icon": { "16": "icon16.png", "32": "icon32.png", "48": "icon48.png", "128": "icon128.png" }
+  },
   "content_scripts": [
     { "matches": ["http://*/*", "https://*/*"], "js": ["content.js"], "run_at": "document_idle", "all_frames": true }
   ],
-  "icons": { "128": "icon128.png" }
+  "icons": { "16": "icon16.png", "32": "icon32.png", "48": "icon48.png", "128": "icon128.png" }
 }

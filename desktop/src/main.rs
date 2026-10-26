@@ -1,4 +1,5 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Always a GUI program, debug builds too: a console window next to a tray app only confuses.
+#![windows_subsystem = "windows"]
 //! Native RDM window (Slint, software renderer: no browser engine) on top of `rdm-core`.
 
 mod autostart;
@@ -161,6 +162,19 @@ fn ext(name: &str) -> String {
     name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default()
 }
 
+/// 1-based index into CATEGORIES (0 = other), for the file-type chip colour.
+fn category_of(name: &str) -> i32 {
+    let e = ext(name);
+    CATEGORIES.iter().position(|(_, exts)| exts.split(' ').any(|x| x == e)).map_or(0, |i| i as i32 + 1)
+}
+
+fn chip_label(name: &str) -> String {
+    match ext(name) {
+        e if e.is_empty() || e.len() > 4 => "FILE".into(),
+        e => e.to_ascii_uppercase(),
+    }
+}
+
 fn matches(v: &View, filter: &str) -> bool {
     match filter {
         "all" => true,
@@ -265,6 +279,8 @@ fn refresh() {
                 Row {
                     id: v.id as i32,
                     name: v.name.clone().into(),
+                    ext: chip_label(&v.name).into(),
+                    cat: category_of(&v.name),
                     size: v.total.or((v.status == Status::Completed).then_some(v.received)).map(|t| size(t as f64)).unwrap_or_default().into(),
                     status: status_text(v).into(),
                     kind: kind_code(v.status),
@@ -587,6 +603,14 @@ mod tests {
         assert!(is_video_page("https://youtu.be/x"));
         assert!(!is_video_page("https://example.com/youtube.com/file.zip"));
         assert!(!is_video_page("https://notyoutube.com/x"));
+    }
+
+    #[test]
+    fn file_type_chips() {
+        assert_eq!((chip_label("a.zip"), category_of("a.zip")), ("ZIP".to_string(), 1));
+        assert_eq!((chip_label("Movie.MP4"), category_of("Movie.MP4")), ("MP4".to_string(), 5));
+        assert_eq!((chip_label("noext"), category_of("noext")), ("FILE".to_string(), 0));
+        assert_eq!(chip_label("x.appimage"), "FILE");
     }
 
     #[test]

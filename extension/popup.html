@@ -7,6 +7,8 @@
     @media (prefers-color-scheme: dark) { :root { --bg: #1b2027; --text: #e3e8ef; --muted: #8b95a5; --line: #2b323c; --accent: #4c8dff; } }
     body { width: 360px; margin: 0; font: 13px/1.4 "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); }
     header { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+    .brand { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+    .brand img { width: 22px; height: 22px; }
     #status { font-size: 12px; color: var(--muted); }
     #status.on::before { content: "\25CF "; color: #1a7f37; }
     #status.off::before { content: "\25CF "; color: #cf222e; }
@@ -26,7 +28,7 @@
   </style>
 </head>
 <body>
-  <header><strong>RDM</strong><span id="status">checking…</span></header>
+  <header><strong class="brand"><img src="icon32.png" alt="">RDM</strong><span id="status">checking…</span></header>
   <label><input type="checkbox" id="capture"> Take over browser downloads</label>
   <h4>Media on this page</h4>
   <ul id="list"></ul>

@@ -3,6 +3,10 @@ import { Button, LineEdit, CheckBox, SpinBox, ListView, Palette } from "std-widg
 export struct Row {
     id: int,
     name: string,
+    // "ZIP", "MP4"... for the file-type chip
+    ext: string,
+    // 0 other, 1 compressed, 2 documents, 3 music, 4 programs, 5 video
+    cat: int,
     size: string,
     status: string,
     // 0 downloading, 1 paused, 2 completed, 3 error
@@ -24,7 +28,7 @@ export struct Category {
     header: bool,
 }
 
-// Fractions of the detail bar: segment start, received width, full width.
+// Fractions of the detail bar: where a connection's segment starts and how much it has received.
 export struct Seg {
     x: float,
     done: float,
@@ -37,56 +41,80 @@ export struct Quality {
 
 global Theme {
     out property <bool> dark: Palette.color-scheme == ColorScheme.dark;
+    out property <color> text: dark ? #e3e8ef : #1c2430;
     out property <color> muted: dark ? #8b95a5 : #687385;
-    out property <color> hover: dark ? #222a34 : #f0f4fa;
+    out property <color> hover: dark ? #222a34 : #eef2f8;
     out property <color> selected: dark ? #1e3150 : #dbe8fd;
     out property <color> accent: dark ? #4c8dff : #1f6feb;
+    out property <color> accent-hover: dark ? #6aa0ff : #1858c4;
     out property <color> line: dark ? #2b323c : #e1e5eb;
     out property <color> panel: dark ? #1b2027 : #ffffff;
     out property <color> page: dark ? #14181e : #f4f6f9;
     out property <color> bar-bg: dark ? #262d37 : #e6ebf1;
     out property <color> bar-fill: dark ? #3b82f6 : #2f81f7;
-    out property <color> bar-edge: dark ? #93c5fd : #0b4fb3;
     out property <color> ok: dark ? #3fb950 : #1a7f37;
     out property <color> warn: dark ? #d29922 : #9a6700;
     out property <color> err: dark ? #f85149 : #cf222e;
+
+    // file-type chip colours, by category
+    public pure function cat-color(cat: int) -> color {
+        if (cat == 1) { return dark ? #e3b341 : #9a6700; }
+        if (cat == 2) { return dark ? #ff9a5c : #c4430b; }
+        if (cat == 3) { return dark ? #f778ba : #bf3989; }
+        if (cat == 4) { return dark ? #39c5cf : #0e7c86; }
+        if (cat == 5) { return dark ? #a371f7 : #8250df; }
+        return dark ? #8b95a5 : #687385;
+    }
+
+    public pure function status-color(kind: int) -> color {
+        if (kind == 1) { return warn; }
+        if (kind == 2) { return ok; }
+        if (kind == 3) { return err; }
+        return accent;
+    }
 }
 
+component Separator inherits Rectangle {
+    width: 1px;
+    height: 22px;
+    background: Theme.line;
+}
+
+// Toolbar button: icon + label side by side; the primary one is filled with the accent colour.
 component ToolButton inherits Rectangle {
     in property <image> icon;
     in property <string> text;
     in property <bool> enabled: true;
     in property <bool> primary;
     callback clicked;
-    min-width: 66px;
-    height: 54px;
-    border-radius: 6px;
-    background: ta.has-hover && root.enabled ? Theme.hover : transparent;
+    height: 34px;
+    border-radius: 8px;
+    background: root.primary ? (ta.has-hover ? Theme.accent-hover : Theme.accent) : (ta.has-hover && root.enabled ? Theme.hover : transparent);
     ta := TouchArea {
         enabled: root.enabled;
-        mouse-cursor: pointer;
+        mouse-cursor: root.enabled ? pointer : default;
         clicked => { root.clicked(); }
     }
-    VerticalLayout {
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 12px;
+        spacing: 7px;
         alignment: center;
-        padding-left: 8px;
-        padding-right: 8px;
-        spacing: 3px;
-        HorizontalLayout {
+        VerticalLayout {
             alignment: center;
             Image {
                 source: root.icon;
-                width: 22px;
-                height: 22px;
-                colorize: root.primary ? Theme.accent : Palette.foreground;
+                width: 17px;
+                height: 17px;
+                colorize: root.primary ? #ffffff : Theme.text;
                 opacity: root.enabled ? 1 : 0.35;
             }
         }
         Text {
             text: root.text;
-            font-size: 12px;
-            horizontal-alignment: center;
-            color: Palette.foreground;
+            vertical-alignment: center;
+            font-weight: root.primary ? 600 : 400;
+            color: root.primary ? #ffffff : Theme.text;
             opacity: root.enabled ? 1 : 0.4;
         }
     }
@@ -95,7 +123,43 @@ component ToolButton inherits Rectangle {
 component Cell inherits Text {
     vertical-alignment: center;
     overflow: elide;
-    color: Palette.foreground;
+    color: Theme.text;
+}
+
+component Chip inherits Rectangle {
+    in property <string> label;
+    in property <color> tint;
+    width: 38px;
+    height: 22px;
+    border-radius: 5px;
+    background: root.tint.with-alpha(Theme.dark ? 0.22 : 0.12);
+    Text {
+        text: root.label;
+        font-size: 10px;
+        font-weight: 700;
+        color: root.tint;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component StatusPill inherits Rectangle {
+    in property <string> text;
+    in property <int> kind;
+    height: 22px;
+    border-radius: 11px;
+    background: Theme.status-color(root.kind).with-alpha(Theme.dark ? 0.2 : 0.11);
+    HorizontalLayout {
+        padding-left: 9px;
+        padding-right: 9px;
+        Text {
+            text: root.text;
+            font-size: 12px;
+            font-weight: 600;
+            vertical-alignment: center;
+            color: Theme.status-color(root.kind);
+        }
+    }
 }
 
 component RowView inherits Rectangle {
@@ -103,7 +167,7 @@ component RowView inherits Rectangle {
     in property <bool> narrow;
     callback pressed(int, bool, bool);
     callback activated(int);
-    height: 28px;
+    height: 40px;
     background: root.entry.selected ? Theme.selected : ta.has-hover ? Theme.hover : transparent;
     ta := TouchArea {
         pointer-event(e) => {
@@ -113,52 +177,70 @@ component RowView inherits Rectangle {
         }
         double-clicked => { root.activated(root.entry.id); }
     }
+    if root.entry.selected: Rectangle {
+        x: 0;
+        width: 3px;
+        background: Theme.accent;
+    }
     HorizontalLayout {
-        padding-left: 8px;
-        padding-right: 8px;
-        spacing: 8px;
-        Cell { text: root.entry.name; horizontal-stretch: 1; min-width: 80px; }
-        Cell { text: root.entry.size; width: 76px; }
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            Chip { label: root.entry.ext; tint: Theme.cat-color(root.entry.cat); }
+        }
+        Cell { text: root.entry.name; horizontal-stretch: 1; min-width: 80px; font-weight: 500; }
+        Cell { text: root.entry.size; width: 76px; color: Theme.muted; }
         HorizontalLayout {
-            width: 142px;
-            spacing: 6px;
+            width: 150px;
+            spacing: 8px;
             alignment: start;
-            Cell {
+            if root.entry.kind != 0: VerticalLayout {
+                alignment: center;
+                StatusPill { text: root.entry.status; kind: root.entry.kind; }
+            }
+            if root.entry.kind == 0: Cell {
                 text: root.entry.status;
-                color: root.entry.kind == 2 ? Theme.ok : root.entry.kind == 1 ? Theme.warn : root.entry.kind == 3 ? Theme.err : Palette.foreground;
+                width: 46px;
+                font-weight: 600;
+                color: Theme.accent;
             }
             if root.entry.bar: VerticalLayout {
                 alignment: center;
                 Rectangle {
                     height: 6px;
-                    width: 60px;
+                    width: 88px;
                     border-radius: 3px;
                     background: Theme.bar-bg;
                     clip: true;
                     Rectangle {
                         x: 0;
                         width: parent.width * root.entry.pct;
+                        border-radius: 3px;
                         background: Theme.bar-fill;
                     }
                 }
             }
         }
-        if !root.narrow: Cell { text: root.entry.left; width: 76px; }
-        Cell { text: root.entry.rate; width: 96px; }
-        if !root.narrow: Cell { text: root.entry.conns; width: 48px; }
-        Cell { text: root.entry.added; width: 116px; }
+        if !root.narrow: Cell { text: root.entry.left; width: 70px; color: Theme.muted; }
+        Cell { text: root.entry.rate; width: 92px; }
+        if !root.narrow: Cell { text: root.entry.conns; width: 44px; color: Theme.muted; horizontal-alignment: center; }
+        Cell { text: root.entry.added; width: 108px; color: Theme.muted; }
     }
     Rectangle {
         y: parent.height - 1px;
         height: 1px;
         background: Theme.line;
+        opacity: 0.7;
     }
 }
 
 component HeaderCell inherits Text {
     vertical-alignment: center;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
+    letter-spacing: 0.4px;
     color: Theme.muted;
     overflow: elide;
 }
@@ -167,36 +249,87 @@ component SideItem inherits Rectangle {
     in property <Category> item;
     in property <bool> active;
     callback chosen(string);
-    height: self.item.header ? 30px : 28px;
+    height: self.item.header ? 32px : 34px;
+    border-radius: 8px;
     background: root.active ? Theme.selected : ta.has-hover && !root.item.header ? Theme.hover : transparent;
     ta := TouchArea {
         enabled: !root.item.header;
-        mouse-cursor: pointer;
+        mouse-cursor: root.item.header ? default : pointer;
         clicked => { root.chosen(root.item.key); }
     }
+    if root.active: Rectangle {
+        x: 0;
+        y: (parent.height - self.height) / 2;
+        width: 3px;
+        height: 16px;
+        border-radius: 1.5px;
+        background: Theme.accent;
+    }
     HorizontalLayout {
-        padding-left: 14px;
-        padding-right: 14px;
+        padding-left: root.item.header ? 10px : 12px;
+        padding-right: 10px;
+        spacing: 10px;
+        if !root.item.header: VerticalLayout {
+            alignment: center;
+            Image {
+                width: 17px;
+                height: 17px;
+                colorize: root.active ? Theme.accent : Theme.muted;
+                source: root.item.key == "all" ? @image-url("icons/cat-all.svg")
+                    : root.item.key == "compressed" ? @image-url("icons/cat-compressed.svg")
+                    : root.item.key == "documents" ? @image-url("icons/cat-documents.svg")
+                    : root.item.key == "music" ? @image-url("icons/cat-music.svg")
+                    : root.item.key == "programs" ? @image-url("icons/cat-programs.svg")
+                    : root.item.key == "video" ? @image-url("icons/cat-video.svg")
+                    : root.item.key == "unfinished" ? @image-url("icons/cat-unfinished.svg")
+                    : @image-url("icons/cat-finished.svg");
+            }
+        }
         Text {
             text: root.item.label;
             vertical-alignment: root.item.header ? bottom : center;
             font-size: root.item.header ? 11px : 13px;
-            font-weight: root.active ? 600 : 400;
-            color: root.item.header ? Theme.muted : root.active ? Theme.accent : Palette.foreground;
+            font-weight: root.item.header ? 600 : root.active ? 600 : 400;
+            letter-spacing: root.item.header ? 0.6px : 0;
+            color: root.item.header ? Theme.muted : root.active ? Theme.accent : Theme.text;
             horizontal-stretch: 1;
         }
-        Text {
-            text: root.item.count;
-            vertical-alignment: center;
-            color: Theme.muted;
+        if root.item.count != "": VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 20px;
+                min-width: 24px;
+                border-radius: 10px;
+                background: root.active ? Theme.accent : Theme.bar-bg;
+                HorizontalLayout {
+                    padding-left: 7px;
+                    padding-right: 7px;
+                    Text {
+                        text: root.item.count;
+                        font-size: 11px;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        color: root.active ? #ffffff : Theme.muted;
+                    }
+                }
+            }
         }
     }
+}
+
+component Card inherits Rectangle {
+    background: Theme.panel;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Theme.line;
+    clip: true;
 }
 
 component Modal inherits Rectangle {
     in property <string> title;
     in property <length> card-width: 520px;
-    background: #00000059;
+    background: #00000066;
     TouchArea { }
     Rectangle {
         width: min(root.card-width, root.width - 40px);
@@ -204,17 +337,20 @@ component Modal inherits Rectangle {
         x: (root.width - self.width) / 2;
         y: (root.height - self.height) / 2;
         background: Theme.panel;
-        border-radius: 10px;
+        border-radius: 12px;
         border-width: 1px;
         border-color: Theme.line;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: #00000040;
+        drop-shadow-offset-y: 6px;
         body := VerticalLayout {
-            padding: 18px;
+            padding: 20px;
             spacing: 12px;
             Text {
                 text: root.title;
-                font-size: 16px;
+                font-size: 17px;
                 font-weight: 600;
-                color: Palette.foreground;
+                color: Theme.text;
             }
             @children
         }
@@ -283,7 +419,7 @@ export component AppWindow inherits Window {
     // rather than bound, because the columns themselves feed into the window's minimum width.
     property <bool> narrow: false;
     changed width => {
-        self.narrow = self.width < 1000px;
+        self.narrow = self.width < 1040px;
     }
 
     // Keyboard shortcuts for the list, like IDM: Delete, Ctrl+A, Ctrl+V (paste a URL to add it).
@@ -313,116 +449,140 @@ export component AppWindow inherits Window {
 
         VerticalLayout {
             // toolbar
-            Rectangle {
-                background: Theme.panel;
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 12px;
+                padding-top: 10px;
+                padding-bottom: 10px;
+                spacing: 6px;
                 HorizontalLayout {
-                    padding: 6px;
-                    spacing: 2px;
-                    ToolButton { icon: @image-url("icons/add.svg"); text: "Add URL"; primary: true; clicked => { root.add-clicked(); } }
-                    ToolButton { icon: @image-url("icons/play.svg"); text: "Resume"; enabled: root.can-resume; clicked => { root.resume-clicked(); } }
-                    ToolButton { icon: @image-url("icons/pause.svg"); text: "Stop"; enabled: root.can-stop; clicked => { root.stop-clicked(); } }
-                    ToolButton { icon: @image-url("icons/trash.svg"); text: "Delete"; enabled: root.can-delete; clicked => { root.delete-clicked(); } }
-                    ToolButton { icon: @image-url("icons/clean.svg"); text: "Delete Completed"; clicked => { root.clean-clicked(); } }
-                    ToolButton { icon: @image-url("icons/folder.svg"); text: "Open Folder"; enabled: root.can-open-folder; clicked => { root.folder-clicked(); } }
-                    Rectangle { horizontal-stretch: 1; }
-                    Text { text: root.totals; vertical-alignment: center; color: Theme.muted; }
-                    Rectangle { width: 12px; }
-                    ToolButton { icon: @image-url("icons/gear.svg"); text: "Options"; clicked => { root.options-clicked(); } }
+                    spacing: 8px;
+                    padding-right: 14px;
+                    VerticalLayout {
+                        alignment: center;
+                        Image { source: @image-url("icons/app.png"); width: 26px; height: 26px; }
+                    }
+                    Text { text: "RDM"; font-size: 17px; font-weight: 700; vertical-alignment: center; color: Theme.text; }
                 }
-                Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+                ToolButton { icon: @image-url("icons/add.svg"); text: "Add URL"; primary: true; clicked => { root.add-clicked(); } }
+                VerticalLayout { alignment: center; padding-left: 4px; padding-right: 4px; Separator { } }
+                ToolButton { icon: @image-url("icons/play.svg"); text: "Resume"; enabled: root.can-resume; clicked => { root.resume-clicked(); } }
+                ToolButton { icon: @image-url("icons/pause.svg"); text: "Stop"; enabled: root.can-stop; clicked => { root.stop-clicked(); } }
+                VerticalLayout { alignment: center; padding-left: 4px; padding-right: 4px; Separator { } }
+                ToolButton { icon: @image-url("icons/trash.svg"); text: "Delete"; enabled: root.can-delete; clicked => { root.delete-clicked(); } }
+                ToolButton { icon: @image-url("icons/clean.svg"); text: "Delete Completed"; clicked => { root.clean-clicked(); } }
+                VerticalLayout { alignment: center; padding-left: 4px; padding-right: 4px; Separator { } }
+                ToolButton { icon: @image-url("icons/folder.svg"); text: "Open Folder"; enabled: root.can-open-folder; clicked => { root.folder-clicked(); } }
+                Rectangle { horizontal-stretch: 1; }
+                Text { text: root.totals; vertical-alignment: center; color: Theme.muted; }
+                Rectangle { width: 10px; }
+                ToolButton { icon: @image-url("icons/gear.svg"); text: "Options"; clicked => { root.options-clicked(); } }
             }
 
             HorizontalLayout {
                 vertical-stretch: 1;
+                padding-left: 10px;
+                padding-right: 14px;
+                padding-bottom: 14px;
+                spacing: 12px;
                 // sidebar
-                Rectangle {
-                    width: 170px;
-                    background: Theme.panel;
-                    VerticalLayout {
-                        padding-top: 4px;
-                        alignment: start;
-                        for c in root.categories: SideItem {
-                            item: c;
-                            active: c.key == root.filter;
-                            chosen(key) => { root.filter-chosen(key); }
-                        }
-                    }
-                    Rectangle { x: parent.width - 1px; width: 1px; background: Theme.line; }
-                }
-                // list
-                Rectangle {
-                    horizontal-stretch: 1;
-                    background: Theme.panel;
-                    VerticalLayout {
-                        Rectangle {
-                            height: 30px;
-                            HorizontalLayout {
-                                padding-left: 8px;
-                                padding-right: 8px;
-                                spacing: 8px;
-                                HeaderCell { text: "File Name"; horizontal-stretch: 1; min-width: 80px; }
-                                HeaderCell { text: "Size"; width: 76px; }
-                                HeaderCell { text: "Status"; width: 142px; }
-                                if !root.narrow: HeaderCell { text: "Time Left"; width: 76px; }
-                                HeaderCell { text: "Transfer Rate"; width: 96px; }
-                                if !root.narrow: HeaderCell { text: "Conn."; width: 48px; }
-                                HeaderCell { text: "Added"; width: 116px; }
-                            }
-                            Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
-                        }
-                        ListView {
-                            vertical-stretch: 1;
-                            for r in root.rows: RowView {
-                                entry: r;
-                                narrow: root.narrow;
-                                pressed(id, ctrl, shift) => {
-                                    keys.focus();
-                                    root.row-pressed(id, ctrl, shift);
-                                }
-                                activated(id) => { root.row-activated(id); }
-                            }
-                        }
-                    }
-                    if root.empty: Text {
-                        y: 80px;
-                        width: parent.width;
-                        horizontal-alignment: center;
-                        text: "No downloads yet. Click Add URL or download something in your browser.";
-                        color: Theme.muted;
-                    }
-                }
-            }
-
-            // details of the selected download, with IDM's per-connection bar
-            if root.detail: Rectangle {
-                vertical-stretch: 0;
-                background: Theme.panel;
-                Rectangle { y: 0; height: 1px; background: Theme.line; }
                 VerticalLayout {
-                    padding: 10px;
-                    padding-left: 12px;
-                    padding-right: 12px;
-                    spacing: 6px;
-                    HorizontalLayout {
-                        spacing: 12px;
-                        Text { text: root.d-name; font-weight: 600; overflow: elide; horizontal-stretch: 1; color: Palette.foreground; }
-                        Text { text: root.d-stats; color: Theme.muted; }
+                    width: 186px;
+                    alignment: start;
+                    spacing: 2px;
+                    for c in root.categories: SideItem {
+                        item: c;
+                        active: c.key == root.filter;
+                        chosen(key) => { root.filter-chosen(key); }
                     }
-                    Rectangle {
-                        height: 18px;
-                        border-radius: 3px;
-                        background: Theme.bar-bg;
-                        clip: true;
-                        for s in root.segs: Rectangle {
-                            x: parent.width * s.x;
-                            width: parent.width * s.done;
-                            background: Theme.bar-fill;
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 12px;
+                    // list
+                    Card {
+                        vertical-stretch: 1;
+                        VerticalLayout {
+                            Rectangle {
+                                height: 36px;
+                                HorizontalLayout {
+                                    padding-left: 14px;
+                                    padding-right: 14px;
+                                    spacing: 10px;
+                                    Rectangle { width: 38px; }
+                                    HeaderCell { text: "FILE NAME"; horizontal-stretch: 1; min-width: 80px; }
+                                    HeaderCell { text: "SIZE"; width: 76px; }
+                                    HeaderCell { text: "STATUS"; width: 150px; }
+                                    if !root.narrow: HeaderCell { text: "TIME LEFT"; width: 70px; }
+                                    HeaderCell { text: "SPEED"; width: 92px; }
+                                    if !root.narrow: HeaderCell { text: "CONN."; width: 44px; horizontal-alignment: center; }
+                                    HeaderCell { text: "ADDED"; width: 108px; }
+                                }
+                                Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
+                            }
+                            ListView {
+                                vertical-stretch: 1;
+                                for r in root.rows: RowView {
+                                    entry: r;
+                                    narrow: root.narrow;
+                                    pressed(id, ctrl, shift) => {
+                                        keys.focus();
+                                        root.row-pressed(id, ctrl, shift);
+                                    }
+                                    activated(id) => { root.row-activated(id); }
+                                }
+                            }
+                        }
+                        if root.empty: VerticalLayout {
+                            alignment: center;
+                            spacing: 12px;
+                            HorizontalLayout {
+                                alignment: center;
+                                Image { source: @image-url("icons/app.png"); width: 56px; height: 56px; opacity: 0.85; }
+                            }
+                            Text {
+                                text: "No downloads yet";
+                                font-size: 15px;
+                                font-weight: 600;
+                                horizontal-alignment: center;
+                                color: Theme.text;
+                            }
+                            Text {
+                                text: "Click Add URL, or download something in your browser.";
+                                horizontal-alignment: center;
+                                color: Theme.muted;
+                            }
                         }
                     }
-                    HorizontalLayout {
-                        spacing: 12px;
-                        Text { text: root.d-url; font-size: 12px; color: Theme.muted; overflow: elide; horizontal-stretch: 1; }
-                        Text { text: root.d-path; font-size: 12px; color: Theme.muted; overflow: elide; horizontal-stretch: 1; horizontal-alignment: right; }
+
+                    // details of the selected download, with IDM's per-connection bar
+                    if root.detail: Card {
+                        vertical-stretch: 0;
+                        VerticalLayout {
+                            padding: 14px;
+                            spacing: 8px;
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Text { text: root.d-name; font-size: 14px; font-weight: 600; overflow: elide; horizontal-stretch: 1; color: Theme.text; }
+                                Text { text: root.d-stats; color: Theme.muted; vertical-alignment: center; }
+                            }
+                            Rectangle {
+                                height: 12px;
+                                border-radius: 6px;
+                                background: Theme.bar-bg;
+                                clip: true;
+                                for s in root.segs: Rectangle {
+                                    x: parent.width * s.x;
+                                    width: parent.width * s.done;
+                                    background: Theme.bar-fill;
+                                }
+                            }
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Text { text: root.d-url; font-size: 12px; color: Theme.muted; overflow: elide; horizontal-stretch: 1; }
+                                Text { text: root.d-path; font-size: 12px; color: Theme.muted; overflow: elide; horizontal-stretch: 1; horizontal-alignment: right; }
+                            }
+                        }
                     }
                 }
             }
@@ -431,8 +591,9 @@ export component AppWindow inherits Window {
 
     if root.dialog == "add": Modal {
         title: "Add URL";
+        Text { text: "A file link, an .m3u8 stream, or a video page (YouTube, Vimeo, Instagram\u{2026})"; color: Theme.muted; wrap: word-wrap; }
         url := LineEdit {
-            placeholder-text: "https://example.com/file.zip or a YouTube link";
+            placeholder-text: "https://";
             text <=> root.add-url;
             init => { self.focus(); }
             accepted => { root.add-submit(self.text); }
@@ -455,12 +616,12 @@ export component AppWindow inherits Window {
         if root.qualities.length > 0: Rectangle {
             border-width: 1px;
             border-color: Theme.line;
-            border-radius: 6px;
-            height: min(root.qualities.length * 36px, 320px);
+            border-radius: 8px;
+            height: min(root.qualities.length * 38px, 342px);
             clip: true;
             ListView {
                 for q[i] in root.qualities: Rectangle {
-                    height: 36px;
+                    height: 38px;
                     background: i == root.quality-index ? Theme.selected : qa.has-hover ? Theme.hover : transparent;
                     qa := TouchArea {
                         clicked => { root.quality-index = i; }
@@ -471,7 +632,7 @@ export component AppWindow inherits Window {
                         padding-right: 12px;
                         spacing: 10px;
                         Text { text: i == root.quality-index ? "\u{25C9}" : "\u{25CB}"; vertical-alignment: center; color: Theme.accent; }
-                        Text { text: q.label; vertical-alignment: center; horizontal-stretch: 1; color: Palette.foreground; }
+                        Text { text: q.label; vertical-alignment: center; horizontal-stretch: 1; color: Theme.text; font-weight: i == root.quality-index ? 600 : 400; }
                         Text { text: q.note; vertical-alignment: center; font-size: 12px; color: Theme.muted; }
                     }
                 }
@@ -517,7 +678,7 @@ export component AppWindow inherits Window {
 
     if root.dialog == "delete": Modal {
         title: "Delete " + root.delete-count + (root.delete-count == 1 ? " download?" : " downloads?");
-        Text { text: "Remove from the list only, or also delete the files from disk?"; color: Palette.foreground; wrap: word-wrap; }
+        Text { text: "Remove from the list only, or also delete the files from disk?"; color: Theme.text; wrap: word-wrap; }
         HorizontalLayout {
             alignment: end;
             spacing: 8px;
