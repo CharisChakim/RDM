@@ -25,6 +25,7 @@ pub async fn run(app: AppHandle) {
         .route("/ping", get(|| async { Json(json!({ "app": "rdm", "version": env!("CARGO_PKG_VERSION") })) }))
         .route("/download", post(download))
         .route("/hls/variants", post(variants))
+        .route("/page/formats", post(page_formats))
         .with_state(app);
     match tokio::net::TcpListener::bind(("127.0.0.1", PORT)).await {
         Ok(listener) => {
@@ -65,6 +66,18 @@ async fn variants(
         .await
         .map(Json)
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("{e:#}")))
+}
+
+/// Qualities of a video page (YouTube, Vimeo...), resolved by yt-dlp with the browser's cookies.
+async fn page_formats(
+    headers: HeaderMap,
+    Json(body): Json<Playlist>,
+) -> Result<Json<Vec<crate::ytdlp::Choice>>, (StatusCode, String)> {
+    if !from_extension(&headers) {
+        return Err((StatusCode::FORBIDDEN, String::new()));
+    }
+    let cookie = body.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("cookie")).map(|(_, v)| v.as_str());
+    crate::ytdlp::resolve(&body.url, cookie).await.map(Json).map_err(|e| (StatusCode::BAD_GATEWAY, e))
 }
 
 /// Web pages can POST to localhost too; browsers always attach their Origin, which pages cannot fake.

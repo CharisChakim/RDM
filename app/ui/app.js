@@ -180,33 +180,44 @@ $('dlg-add').addEventListener('close', async () => {
   const url = $('add-url').value.trim();
   let job = { url };
   if (/\.m3u8(\?|$)/i.test(url)) {
-    let variants;
-    try {
-      variants = await invoke('hls_variants', { url });
-    } catch (e) {
-      alert(`Could not read the playlist:\n${e}`);
-      return;
-    }
-    const v = variants.length > 1 ? await pickQuality(variants) : variants[0];
+    const v = await pickQuality(() => invoke('hls_variants', { url }));
     if (!v) return;
     job = { url: v.url, kind: 'hls', audio_url: v.audio_url };
+  } else if (VIDEO_SITE.test(url)) {
+    // A page, not a file: yt-dlp finds the streams, RDM downloads them.
+    const c = await pickQuality(() => invoke('page_formats', { url }));
+    if (!c) return;
+    job = { url: c.url, kind: c.kind, audio_url: c.audio_url, headers: c.headers, file_name: c.file_name };
   }
   const id = await invoke('add', { job });
   selected.clear();
   selected.add(id);
 });
 
-// Resolves to the chosen variant, or null when cancelled. Best quality is preselected.
-function pickQuality(variants) {
-  $('q-list').innerHTML = variants.map((v, i) => `
-    <label><input type="radio" name="q" value="${i}"${i ? '' : ' checked'}>
-      <span>${esc(v.label)}</span>${v.audio_url ? '<small>separate audio, merged</small>' : ''}</label>`).join('');
+const VIDEO_SITE = /^https?:\/\/([a-z0-9-]+\.)*(youtube\.com|youtu\.be|vimeo\.com|instagram\.com|x\.com|twitter\.com|tiktok\.com|facebook\.com|fb\.watch|dailymotion\.com|twitch\.tv|reddit\.com|bilibili\.com)\//i;
+
+// Opens the quality dialog while `load` runs, then resolves to the chosen item (best first and
+// preselected), or null when cancelled or loading failed.
+function pickQuality(load) {
   const dlg = $('dlg-quality');
+  const ok = dlg.querySelector('button.primary');
+  $('q-list').innerHTML = '<div class="qwait">Reading available qualities…</div>';
+  ok.disabled = true;
   dlg.showModal();
+  let items = [];
+  load().then((list) => {
+    items = list;
+    $('q-list').innerHTML = list.map((v, i) => `
+      <label><input type="radio" name="q" value="${i}"${i ? '' : ' checked'}>
+        <span>${esc(v.label)}</span>${v.audio_url ? '<small>separate audio, merged</small>' : ''}</label>`).join('');
+    ok.disabled = false;
+  }, (e) => {
+    $('q-list').innerHTML = `<div class="qwait">Could not read qualities: ${esc(e)}</div>`;
+  });
   return new Promise((resolve) => {
     dlg.addEventListener('close', () => {
       const checked = dlg.querySelector('input[name=q]:checked');
-      resolve(dlg.returnValue === 'ok' && checked ? variants[Number(checked.value)] : null);
+      resolve(dlg.returnValue === 'ok' && checked ? items[Number(checked.value)] : null);
     }, { once: true });
   });
 }

@@ -21,7 +21,8 @@ pub use hls::{variants as hls_variants, Variant};
 pub use reqwest::Client;
 
 const BUF_SIZE: usize = 1 << 20;
-const MIN_SPLIT: u64 = 1 << 20;
+// IDM splits down to ~160 KB; a smaller floor shortens the tail when connections run at uneven speeds.
+const MIN_SPLIT: u64 = 256 << 10;
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_RETRIES: u32 = 5;
 const UNKNOWN: u64 = u64::MAX;
@@ -87,25 +88,25 @@ pub enum Outcome {
 #[derive(Clone)]
 pub struct Handle {
     shared: Arc<Shared>,
+    /// A separate audio track downloaded alongside (video + audio jobs).
+    audio: Option<Arc<Shared>>,
     cancel: CancellationToken,
 }
 
 impl Handle {
     pub fn progress(&self) -> Progress {
-        let s = &self.shared;
-        let total = s.total.load(Relaxed);
-        Progress {
-            path: s.path.lock().unwrap().clone(),
-            total: (total != UNKNOWN).then_some(total),
-            received: s.received.load(Relaxed),
-            connections: s.active.load(Relaxed),
-            resumable: s.resumable.load(Relaxed),
-            segments: s.segs.lock().unwrap().list.iter().map(|g| [g.start, g.claimed, g.end]).collect(),
-            pieces: match s.pieces_total.load(Relaxed) {
-                0 => None,
-                n => Some([s.pieces_done.load(Relaxed), n]),
-            },
+        let mut p = self.shared.progress();
+        if let Some(a) = &self.audio {
+            // One combined view: audio bytes and segments follow the video's.
+            let a = a.progress();
+            let offset = p.total.unwrap_or(0);
+            p.total = p.total.zip(a.total).map(|(v, a)| v + a);
+            p.received += a.received;
+            p.connections += a.connections;
+            p.resumable &= a.resumable;
+            p.segments.extend(a.segments.iter().map(|s| s.map(|x| x + offset)));
         }
+        p
     }
 
     pub fn pause(&self) {
@@ -122,6 +123,37 @@ struct Shared {
     segs: Mutex<Segments>,
     pieces_done: AtomicU64,
     pieces_total: AtomicU64,
+}
+
+impl Shared {
+    fn new() -> Arc<Self> {
+        Arc::new(Shared {
+            path: Mutex::new(None),
+            total: AtomicU64::new(UNKNOWN),
+            received: AtomicU64::new(0),
+            active: AtomicUsize::new(0),
+            resumable: AtomicBool::new(false),
+            segs: Mutex::new(Segments::new(0, MIN_SPLIT)),
+            pieces_done: AtomicU64::new(0),
+            pieces_total: AtomicU64::new(0),
+        })
+    }
+
+    fn progress(&self) -> Progress {
+        let total = self.total.load(Relaxed);
+        Progress {
+            path: self.path.lock().unwrap().clone(),
+            total: (total != UNKNOWN).then_some(total),
+            received: self.received.load(Relaxed),
+            connections: self.active.load(Relaxed),
+            resumable: self.resumable.load(Relaxed),
+            segments: self.segs.lock().unwrap().list.iter().map(|g| [g.start, g.claimed, g.end]).collect(),
+            pieces: match self.pieces_total.load(Relaxed) {
+                0 => None,
+                n => Some([self.pieces_done.load(Relaxed), n]),
+            },
+        }
+    }
 }
 
 /// What we persist next to the .part file so a download survives pause/crash.
@@ -143,23 +175,69 @@ struct Ctx {
 }
 
 pub fn start(client: Client, req: Request) -> (Handle, tokio::task::JoinHandle<Result<Outcome>>) {
-    let shared = Arc::new(Shared {
-        path: Mutex::new(None),
-        total: AtomicU64::new(UNKNOWN),
-        received: AtomicU64::new(0),
-        active: AtomicUsize::new(0),
-        resumable: AtomicBool::new(false),
-        segs: Mutex::new(Segments::new(0, MIN_SPLIT)),
-        pieces_done: AtomicU64::new(0),
-        pieces_total: AtomicU64::new(0),
-    });
-    let handle = Handle { shared: shared.clone(), cancel: CancellationToken::new() };
+    if req.kind == Kind::File && req.audio_url.is_some() {
+        return start_with_audio(client, req);
+    }
+    let shared = Shared::new();
+    let handle = Handle { shared: shared.clone(), audio: None, cancel: CancellationToken::new() };
     let cancel = handle.cancel.clone();
     let task = tokio::spawn(async move {
         match req.kind {
             Kind::File => run(client, req, shared, cancel).await,
             Kind::Hls => hls::run(client, req, shared, cancel).await,
         }
+    });
+    (handle, task)
+}
+
+/// Video file + separate audio file (e.g. YouTube's adaptive formats): both download at the same
+/// time, each multi-connection and resumable on its own, then ffmpeg joins them into `file_name`.
+fn start_with_audio(client: Client, req: Request) -> (Handle, tokio::task::JoinHandle<Result<Outcome>>) {
+    let name = names::sanitize(req.file_name.as_deref().unwrap_or("video.mkv"));
+    let (stem, ext) = name.rsplit_once('.').unwrap_or((&name, "mkv"));
+    let (stem, ext) = (stem.to_string(), ext.to_string());
+    let audio_conns = (req.connections / 4).max(1);
+    let video_req = Request {
+        file_name: Some(format!("{stem}.video")),
+        audio_url: None,
+        connections: req.connections.saturating_sub(audio_conns).max(1),
+        ..req.clone()
+    };
+    let audio_req = Request {
+        url: req.audio_url.clone().unwrap_or_default(),
+        file_name: Some(format!("{stem}.audio")),
+        audio_url: None,
+        connections: audio_conns,
+        ..req.clone()
+    };
+    let (video, audio) = (Shared::new(), Shared::new());
+    let handle = Handle { shared: video.clone(), audio: Some(audio.clone()), cancel: CancellationToken::new() };
+    let cancel = handle.cancel.clone();
+    let task = tokio::spawn(async move {
+        let (v, a) = tokio::join!(
+            run(client.clone(), video_req, video.clone(), cancel.clone()),
+            run(client, audio_req, audio, cancel.clone()),
+        );
+        let (v, a) = match (v, a) {
+            (Ok(Outcome::Completed(v)), Ok(Outcome::Completed(a))) => (v, a),
+            (Err(e), _) | (_, Err(e)) => return Err(e),
+            _ => return Ok(Outcome::Paused),
+        };
+        let dest = req.dir.join(names::unique(&req.dir, &format!("{stem}.{ext}")));
+        *video.path.lock().unwrap() = Some(dest.clone());
+        let joined = tokio::task::spawn_blocking({
+            let (v, a, dest) = (v.clone(), a.clone(), dest.clone());
+            move || hls::mux(&v, &a, &dest)
+        })
+        .await?;
+        if !joined {
+            // No ffmpeg (or it failed): keep both tracks rather than lose the download.
+            *video.path.lock().unwrap() = Some(v.clone());
+            return Ok(Outcome::Completed(v));
+        }
+        std::fs::remove_file(&v).ok();
+        std::fs::remove_file(&a).ok();
+        Ok(Outcome::Completed(dest))
     });
     (handle, task)
 }
@@ -326,12 +404,27 @@ async fn worker(ctx: Arc<Ctx>, mut first: Option<(usize, Response)>) -> Result<(
         let result = drive(&ctx, idx, resp).await;
         ctx.shared.active.fetch_sub(1, Relaxed);
         ctx.shared.segs.lock().unwrap().list[idx].owned = false;
-        result?;
+        match result {
+            // This connection steps aside; its segment is now an orphan the others pick up.
+            Err(e) if e.is::<TooManyConnections>() => return Ok(()),
+            r => r?,
+        }
         if ctx.cancel.is_cancelled() {
             return Ok(());
         }
     }
 }
+
+#[derive(Debug)]
+struct TooManyConnections;
+
+impl std::fmt::Display for TooManyConnections {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("server refused another connection (429/503)")
+    }
+}
+
+impl std::error::Error for TooManyConnections {}
 
 /// Download one segment to its (possibly shrinking) end, retrying broken connections.
 async fn drive(ctx: &Ctx, idx: usize, mut resp: Option<Response>) -> Result<()> {
@@ -342,6 +435,13 @@ async fn drive(ctx: &Ctx, idx: usize, mut resp: Option<Response>) -> Result<()> 
         let result = fetch(ctx, idx, resp.take()).await;
         if ctx.shared.segs.lock().unwrap().list[idx].remaining() == 0 || ctx.cancel.is_cancelled() {
             return Ok(());
+        }
+        // The server wants fewer connections: back off for good while others keep going
+        // (IDM keeps retrying here and gets nowhere). The last connection retries as usual.
+        if let Err(e) = &result {
+            if e.is::<TooManyConnections>() && ctx.shared.active.load(Relaxed) > 1 {
+                return Err(TooManyConnections.into());
+            }
         }
         if claimed() > before {
             failures = 0;
@@ -375,6 +475,9 @@ async fn fetch(ctx: &Ctx, idx: usize, resp: Option<Response>) -> Result<()> {
                 .header(RANGE, format!("bytes={from}-{}", to - 1))
                 .send()
                 .await?;
+            if matches!(r.status(), StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE) {
+                return Err(TooManyConnections.into());
+            }
             if r.status() != StatusCode::PARTIAL_CONTENT {
                 bail!("range request got {}", r.status());
             }

@@ -57,8 +57,9 @@ $('capture').onchange = (e) => chrome.storage.local.set({ capture: e.target.chec
 (async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const entries = (await chrome.runtime.sendMessage({ type: 'get-entries', tabId: tab.id })) || [];
+  $('page-btn').onclick = () => pageQualities(tab.id);
   if (!entries.length) {
-    $('list').outerHTML = '<div class="empty">Nothing detected yet. Start playing the video, then open this again.</div>';
+    $('list').outerHTML = '<div class="empty">No media seen on the network yet. For YouTube and similar sites, use Find qualities.</div>';
     return;
   }
   for (const e of entries) {
@@ -78,3 +79,35 @@ $('capture').onchange = (e) => chrome.storage.local.set({ capture: e.target.chec
     $('list').appendChild(li);
   }
 })();
+
+// Qualities of the page itself, resolved by the app with yt-dlp (YouTube, Vimeo, Instagram...).
+async function pageQualities(tabId) {
+  const button = $('page-btn');
+  button.disabled = true;
+  button.textContent = 'Reading…';
+  const r = await chrome.runtime.sendMessage({ type: 'page-formats', tabId });
+  button.textContent = 'Find qualities';
+  button.disabled = false;
+  if (!r?.ok) {
+    $('page-list').innerHTML = '';
+    const li = document.createElement('li');
+    li.textContent = r?.error || 'RDM is not running';
+    $('page-list').appendChild(li);
+    return;
+  }
+  $('page-list').innerHTML = '';
+  for (const c of r.choices) {
+    const li = document.createElement('li');
+    const span = document.createElement('span');
+    span.textContent = c.label;
+    span.title = c.file_name;
+    const btn = document.createElement('button');
+    btn.textContent = 'Download';
+    btn.onclick = async () => {
+      const ok = await chrome.runtime.sendMessage({ type: 'download-choice', choice: c });
+      btn.textContent = ok ? 'Sent' : 'Failed';
+    };
+    li.append(span, btn);
+    $('page-list').appendChild(li);
+  }
+}

@@ -371,7 +371,7 @@ fn remux(ts: &Path) -> Option<PathBuf> {
 }
 
 /// Video track + separate audio track -> one file.
-fn mux(video: &Path, audio: &Path, out: &Path) -> bool {
+pub(crate) fn mux(video: &Path, audio: &Path, out: &Path) -> bool {
     let ok = ffmpeg(|c| {
         c.arg("-i").arg(video).arg("-i").arg(audio).args(["-map", "0:v:0", "-map", "1:a:0", "-c", "copy"]).arg(out)
     });

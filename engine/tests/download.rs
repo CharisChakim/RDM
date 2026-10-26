@@ -4,6 +4,7 @@
 use rand::RngCore;
 use rdm_engine::{client, start, Kind, Outcome, Request};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -11,13 +12,17 @@ use tokio::net::TcpListener;
 
 const MIB: usize = 1 << 20;
 
-async fn serve(data: Arc<Vec<u8>>, ranges: bool, bytes_per_sec: usize) -> String {
+/// `max_streams` > 0: answer 429 when that many responses are already streaming (like servers
+/// that cap connections per client).
+async fn serve(data: Arc<Vec<u8>>, ranges: bool, bytes_per_sec: usize, max_streams: usize) -> String {
+    let streams = Arc::new(AtomicUsize::new(0));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         loop {
             let (mut sock, _) = listener.accept().await.unwrap();
             let data = data.clone();
+            let streams = streams.clone();
             tokio::spawn(async move {
                 loop {
                     let mut req = Vec::new();
@@ -47,6 +52,14 @@ async fn serve(data: Arc<Vec<u8>>, ranges: bool, bytes_per_sec: usize) -> String
                         ),
                         None => (format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", data.len()), &data[..]),
                     };
+                    let _slot = Slot::take(&streams);
+                    if max_streams > 0 && streams.load(SeqCst) > max_streams {
+                        let busy = "HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\n\r\n";
+                        if sock.write_all(busy.as_bytes()).await.is_err() {
+                            return;
+                        }
+                        continue;
+                    }
                     if sock.write_all(head.as_bytes()).await.is_err() {
                         return;
                     }
@@ -61,6 +74,22 @@ async fn serve(data: Arc<Vec<u8>>, ranges: bool, bytes_per_sec: usize) -> String
         }
     });
     format!("http://{addr}/files/test.bin")
+}
+
+/// Counts a streaming response for as long as it lives.
+struct Slot(Arc<AtomicUsize>);
+
+impl Slot {
+    fn take(n: &Arc<AtomicUsize>) -> Self {
+        n.fetch_add(1, SeqCst);
+        Slot(n.clone())
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, SeqCst);
+    }
 }
 
 fn random_data(len: usize) -> Arc<Vec<u8>> {
@@ -82,7 +111,7 @@ fn request(url: &str, dir: &PathBuf, connections: usize) -> Request {
 #[tokio::test(flavor = "multi_thread")]
 async fn multi_connection_is_correct_and_faster() {
     let data = random_data(16 * MIB);
-    let url = serve(data.clone(), true, 2 * MIB).await;
+    let url = serve(data.clone(), true, 2 * MIB, 0).await;
     let dir = temp_dir();
 
     let t = Instant::now();
@@ -98,9 +127,20 @@ async fn multi_connection_is_correct_and_faster() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn adapts_when_server_caps_connections() {
+    let data = random_data(8 * MIB);
+    let url = serve(data.clone(), true, 4 * MIB, 3).await;
+    let dir = temp_dir();
+    let (_, task) = start(client(), request(&url, &dir, 8));
+    let out = tokio::time::timeout(Duration::from_secs(30), task).await.expect("stalled").unwrap().unwrap();
+    assert_eq!(out, Outcome::Completed(dir.join("test.bin")));
+    assert!(std::fs::read(dir.join("test.bin")).unwrap() == *data, "content mismatch");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn falls_back_without_range_support() {
     let data = random_data(3 * MIB);
-    let url = serve(data.clone(), false, 64 * MIB).await;
+    let url = serve(data.clone(), false, 64 * MIB, 0).await;
     let dir = temp_dir();
     let (h, task) = start(client(), request(&url, &dir, 8));
     let out = task.await.unwrap().unwrap();
@@ -112,7 +152,7 @@ async fn falls_back_without_range_support() {
 #[tokio::test(flavor = "multi_thread")]
 async fn pause_then_resume() {
     let data = random_data(16 * MIB);
-    let url = serve(data.clone(), true, 2 * MIB).await;
+    let url = serve(data.clone(), true, 2 * MIB, 0).await;
     let dir = temp_dir();
 
     let (h, task) = start(client(), request(&url, &dir, 8));

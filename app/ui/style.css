@@ -107,6 +107,8 @@ dialog .row { display: flex; gap: 6px; }
 .qlist label:hover { background: var(--row-hover); }
 .qlist input { width: auto; margin: 0; }
 .qlist small { margin-left: auto; color: var(--muted); }
+.qwait { padding: 14px 10px; color: var(--muted); }
+dialog button:disabled { opacity: .5; cursor: default; }
 dialog menu { display: flex; justify-content: flex-end; gap: 8px; margin: 16px 0 0; padding: 0; }
 dialog button, .row button { padding: 6px 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; cursor: pointer; margin-top: 4px; }
 dialog button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }

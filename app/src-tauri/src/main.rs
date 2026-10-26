@@ -2,6 +2,7 @@
 
 mod server;
 mod store;
+mod ytdlp;
 
 use rdm_engine::{Handle, Kind, Outcome, Request, Variant};
 use serde::{Deserialize, Serialize};
@@ -229,6 +230,11 @@ fn add(app: AppHandle, job: Job) -> u64 {
 }
 
 #[tauri::command]
+async fn page_formats(url: String) -> Result<Vec<ytdlp::Choice>, String> {
+    ytdlp::resolve(url.trim(), None).await
+}
+
+#[tauri::command]
 async fn hls_variants(state: State<'_, App>, url: String) -> Result<Vec<Variant>, String> {
     rdm_engine::hls_variants(&state.client, url.trim(), &[]).await.map_err(|e| format!("{e:#}"))
 }
@@ -345,7 +351,7 @@ fn main() {
             tauri::async_runtime::spawn(server::run(handle));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![add, hls_variants, list, pause, resume, remove, open, get_settings, set_settings, pick_dir])
+        .invoke_handler(tauri::generate_handler![add, page_formats, hls_variants, list, pause, resume, remove, open, get_settings, set_settings, pick_dir])
         .run(tauri::generate_context!())
         .expect("error while running RDM");
 }

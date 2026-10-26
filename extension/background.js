@@ -69,7 +69,6 @@ function addMedia(tabId, item) {
     list.push(item);
     await chrome.storage.session.set({ [key(tabId)]: list.slice(-30) });
     chrome.action.setBadgeText({ tabId, text: String(Math.min(list.length, 30)) });
-    chrome.tabs.sendMessage(tabId, { type: 'media-updated' }).catch(() => {});
   }).catch(() => {});
 }
 
@@ -181,6 +180,34 @@ async function downloadMedia(tabId, url, variant) {
   });
 }
 
+// Pages whose streams can't be read from the network (YouTube and friends): the app asks yt-dlp.
+const pageCache = new Map();
+async function pageFormats(tabId) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab?.url || !/^https?:/i.test(tab.url)) return { ok: false, error: 'not a web page' };
+  if (pageCache.has(tab.url)) return pageCache.get(tab.url);
+  // yt-dlp picks YouTube's clients itself; browser cookies would force the more restricted one.
+  const youtube = /(^|\.)(youtube\.com|youtu\.be)$/i.test(new URL(tab.url).hostname);
+  const headers = youtube ? [] : (await headersFor(tab.url, null)).filter(([k]) => k === 'Cookie');
+  try {
+    const r = await fetch(`${API}/page/formats`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: tab.url, headers }),
+    });
+    const result = r.ok ? { ok: true, choices: await r.json() } : { ok: false, error: (await r.text()) || `HTTP ${r.status}` };
+    if (result.ok) pageCache.set(tab.url, result);
+    if (pageCache.size > 50) pageCache.delete(pageCache.keys().next().value);
+    return result;
+  } catch {
+    return { ok: false, error: 'RDM is not running' };
+  }
+}
+
+function downloadChoice(c) {
+  return sendToApp({ url: c.url, audio_url: c.audio_url, kind: c.kind, headers: c.headers, file_name: c.file_name });
+}
+
 // Several links picked in the popup; each goes to the app with the page as referrer.
 async function downloadUrls(tabId, urls) {
   const tab = await chrome.tabs.get(tabId).catch(() => null);
@@ -222,10 +249,11 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   const tabId = msg.tabId ?? sender.tab?.id;
-  if (msg.type === 'get-media') getMedia(tabId).then(reply);
-  else if (msg.type === 'get-entries') entries(tabId).then(reply);
+  if (msg.type === 'get-entries') entries(tabId).then(reply);
   else if (msg.type === 'download-media') downloadMedia(tabId, msg.url, msg.variant).then(reply);
   else if (msg.type === 'download-urls') downloadUrls(tabId, msg.urls).then(reply);
+  else if (msg.type === 'page-formats') pageFormats(tabId).then(reply);
+  else if (msg.type === 'download-choice') downloadChoice(msg.choice).then(reply);
   else if (msg.type === 'status') appAlive().then(reply);
   else return false;
   return true; // reply is async

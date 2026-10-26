@@ -90,6 +90,39 @@ async fn downloads_best_variant_with_encrypted_segments() {
     assert_eq!(h.progress().pieces, Some([5, 5]));
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn downloads_video_and_separate_audio_file_together() {
+    let mut video = vec![0u8; 300_000];
+    let mut audio = vec![0u8; 40_000];
+    rand::thread_rng().fill_bytes(&mut video);
+    rand::thread_rng().fill_bytes(&mut audio);
+    let mut files = HashMap::new();
+    files.insert("/v.mp4".to_string(), video.clone());
+    files.insert("/a.m4a".to_string(), audio.clone());
+    let base = serve(files).await;
+
+    let dir = std::env::temp_dir().join(format!("rdm-av-{}", rand::random::<u32>()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let req = Request {
+        url: format!("{base}/v.mp4"),
+        headers: vec![],
+        dir: dir.clone(),
+        file_name: Some("clip.mp4".into()),
+        connections: 8,
+        kind: Kind::File,
+        audio_url: Some(format!("{base}/a.m4a")),
+    };
+    let (h, task) = start(client(), req);
+    let Outcome::Completed(path) = task.await.unwrap().unwrap() else { panic!("not completed") };
+    let p = h.progress();
+    assert_eq!(p.received, (video.len() + audio.len()) as u64);
+    // Random bytes can't be muxed, so both tracks are kept and the video is reported.
+    assert_eq!(path, dir.join("clip.video"));
+    assert!(std::fs::read(&path).unwrap() == video, "video mismatch");
+    assert!(std::fs::read(dir.join("clip.audio")).unwrap() == audio, "audio mismatch");
+    assert!(!dir.join("clip.mp4").exists());
+}
+
 fn random_segments(prefix: &str, n: usize, files: &mut HashMap<String, Vec<u8>>) -> (String, Vec<u8>) {
     let mut playlist = String::from("#EXTM3U\n");
     let mut all = Vec::new();

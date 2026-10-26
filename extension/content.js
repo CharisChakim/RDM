@@ -1,15 +1,11 @@
 // "Download this video" button over playing videos, like IDM's panel (but drawn in the page).
 (() => {
-  let media = [];
   let host, btn, menu, target, hideTimer;
 
-  const refresh = () => chrome.runtime.sendMessage({ type: 'get-media' }).then((m) => { media = m || []; }).catch(() => {});
   chrome.runtime.onMessage.addListener((m, _sender, reply) => {
-    if (m.type === 'media-updated') refresh();
     // Only the top frame answers, so the popup gets one list per page.
     if (m.type === 'scan-links' && window === window.top) reply(scanLinks());
   });
-  refresh();
 
   // File types worth offering, after IDM's default capture list plus a few modern ones.
   const DOWNLOADABLE = new RegExp('\\.(' + [
@@ -37,7 +33,16 @@
 
   const size = (b) => (b ? ` ${(b / 1048576).toFixed(1)} MB` : '');
   // Entries come from the background: streams (one per quality) first, then files.
-  const label = (e) => (e.kind === 'hls' ? `Video ${e.label}${e.audio ? ' + audio' : ''}` : `${e.label}${size(e.size)}`);
+  const label = (e) => {
+    if (e.page) return 'More qualities from this page…';
+    if (e.choice) return `Video ${e.choice.label}`;
+    return e.kind === 'hls' ? `Video ${e.label}${e.audio ? ' + audio' : ''}` : `${e.label}${size(e.size)}`;
+  };
+  const IDLE = '&#11015; Download this video';
+  const flash = (text) => {
+    btn.textContent = text;
+    setTimeout(() => { btn.innerHTML = IDLE; }, 2500);
+  };
 
   function ui() {
     if (host) return;
@@ -59,27 +64,42 @@
       if (menu.style.display === 'block') { menu.style.display = 'none'; return; }
       btn.textContent = '… Reading qualities';
       const list = (await chrome.runtime.sendMessage({ type: 'get-entries' }).catch(() => null)) || [];
-      btn.innerHTML = '&#11015; Download this video';
-      if (list.length === 1) return send(list[0]);
-      menu.innerHTML = '';
-      for (const entry of list) {
-        const a = document.createElement('a');
-        a.textContent = label(entry);
-        a.title = entry.variant?.url || entry.url;
-        a.onclick = (ev) => { ev.stopPropagation(); send(entry); };
-        menu.appendChild(a);
-      }
-      menu.style.display = 'block';
+      btn.innerHTML = IDLE;
+      // Nothing seen on the network (YouTube streams, for one): ask the page itself.
+      if (!list.length) return pageQualities();
+      show([...list, { page: true }]);
     });
     host.addEventListener('mouseenter', () => clearTimeout(hideTimer));
     document.documentElement.appendChild(host);
   }
 
+  function show(list) {
+    menu.innerHTML = '';
+    for (const entry of list) {
+      const a = document.createElement('a');
+      a.textContent = label(entry);
+      a.title = entry.choice?.url || entry.variant?.url || entry.url || '';
+      a.onclick = (ev) => { ev.stopPropagation(); send(entry); };
+      menu.appendChild(a);
+    }
+    menu.style.display = 'block';
+  }
+
+  async function pageQualities() {
+    menu.style.display = 'none';
+    btn.textContent = '… Reading qualities';
+    const r = await chrome.runtime.sendMessage({ type: 'page-formats' }).catch(() => null);
+    if (!r?.ok) return flash(`✖ ${r?.error || 'RDM is not running'}`.slice(0, 80));
+    btn.innerHTML = IDLE;
+    show(r.choices.map((choice) => ({ choice })));
+  }
+
   function send(entry) {
-    chrome.runtime.sendMessage({ type: 'download-media', url: entry.url, variant: entry.variant }).then((ok) => {
-      btn.textContent = ok ? '✔ Sent to RDM' : '✖ RDM is not running';
-      setTimeout(() => { btn.innerHTML = '&#11015; Download this video'; }, 2000);
-    });
+    if (entry.page) return pageQualities();
+    const msg = entry.choice
+      ? { type: 'download-choice', choice: entry.choice }
+      : { type: 'download-media', url: entry.url, variant: entry.variant };
+    chrome.runtime.sendMessage(msg).then((ok) => flash(ok ? '✔ Sent to RDM' : '✖ RDM is not running'));
     menu.style.display = 'none';
   }
 
@@ -98,7 +118,7 @@
   // Players cover the <video> with their own controls, so hit-test by geometry rather than event target.
   let pending = false;
   document.addEventListener('mousemove', (e) => {
-    if (pending || !media.length) return;
+    if (pending) return;
     pending = true;
     requestAnimationFrame(() => {
       pending = false;
