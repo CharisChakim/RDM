@@ -204,6 +204,15 @@ async function pageFormats(tabId) {
   }
 }
 
+// Everything the video panel offers: streams seen on the network (plus a way to ask the page for
+// more), or, when nothing usable went over the network (YouTube), the page's own qualities.
+async function videoMenu(tabId) {
+  const list = await entries(tabId);
+  if (list.length) return { ok: true, list: [...list, { page: true }] };
+  const r = await pageFormats(tabId);
+  return r.ok ? { ok: true, list: r.choices.map((choice) => ({ choice })) } : r;
+}
+
 function downloadChoice(c) {
   return sendToApp({ url: c.url, audio_url: c.audio_url, kind: c.kind, headers: c.headers, file_name: c.file_name });
 }
@@ -253,6 +262,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   else if (msg.type === 'download-media') downloadMedia(tabId, msg.url, msg.variant).then(reply);
   else if (msg.type === 'download-urls') downloadUrls(tabId, msg.urls).then(reply);
   else if (msg.type === 'page-formats') pageFormats(tabId).then(reply);
+  else if (msg.type === 'video-menu') videoMenu(tabId).then(reply);
   else if (msg.type === 'download-choice') downloadChoice(msg.choice).then(reply);
   else if (msg.type === 'status') appAlive().then(reply);
   else return false;
