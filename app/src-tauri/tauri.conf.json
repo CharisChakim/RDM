@@ -11,11 +11,13 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "RDM - Rust Download Manager",
         "width": 1120,
         "height": 660,
         "minWidth": 760,
-        "minHeight": 420
+        "minHeight": 420,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-gpu --disable-extensions --disable-background-networking --disable-component-update --disable-sync"
       }
     ],
     "security": {

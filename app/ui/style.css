@@ -76,7 +76,18 @@ th {
   position: sticky; top: 0; z-index: 1; text-align: left; font-weight: 600; font-size: 12px;
   padding: 6px 8px; background: var(--panel); border-bottom: 1px solid var(--line); color: var(--muted);
 }
-th.c-name { width: 34%; }
+/* Fixed widths for the data columns; the file name takes whatever is left. */
+th.c-size { width: 84px; }
+th.c-status { width: 150px; }
+th.c-left { width: 84px; }
+th.c-rate { width: 104px; }
+th.c-conn { width: 56px; }
+th.c-added { width: 124px; }
+/* Narrow windows: drop the least useful columns so the file name keeps its room. */
+@media (max-width: 1000px) {
+  th:nth-child(4), td:nth-child(4), th:nth-child(6), td:nth-child(6) { display: none; }
+  .sidebar { width: 150px; }
+}
 td { padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 tr:hover td { background: var(--row-hover); }
 tr.sel td { background: var(--row-sel); }
@@ -101,6 +112,9 @@ dialog h3 { margin: 0 0 12px; }
 dialog label { display: block; margin-bottom: 12px; color: var(--muted); }
 dialog input { width: 100%; margin-top: 4px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; user-select: text; }
 dialog .row { display: flex; gap: 6px; }
+dialog label.check { display: flex; align-items: center; gap: 8px; color: var(--text); }
+dialog label.check input { width: auto; margin: 0; }
+dialog .hint { margin: -4px 0 0; color: var(--muted); font-size: 12px; }
 .qlist { max-height: 50vh; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
 .qlist label { display: flex; align-items: center; gap: 10px; margin: 0; padding: 8px 10px; color: var(--text); cursor: pointer; border-bottom: 1px solid var(--line); }
 .qlist label:last-child { border-bottom: 0; }

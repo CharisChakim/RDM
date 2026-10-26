@@ -61,6 +61,13 @@ function statusText(r) {
   }
 }
 
+// "26/10/26 11:33": short enough for the column; the full date is in the tooltip.
+function shortDate(secs) {
+  return new Date(secs * 1000).toLocaleString(undefined, {
+    day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+}
+
 function esc(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
@@ -75,7 +82,7 @@ function render() {
       <td>${eta(r)}</td>
       <td>${r.status === 'Downloading' ? size(r.speed) + '/s' : ''}</td>
       <td>${r.status === 'Downloading' ? r.connections : ''}</td>
-      <td>${new Date(r.added * 1000).toLocaleString()}</td>
+      <td title="${new Date(r.added * 1000).toLocaleString()}">${shortDate(r.added)}</td>
     </tr>`).join('');
   $('empty').hidden = rows.length > 0;
 
@@ -237,6 +244,7 @@ $('btn-settings').onclick = async () => {
   const s = await invoke('get_settings');
   $('set-dir').value = s.dir;
   $('set-conn').value = s.connections;
+  $('set-autostart').checked = s.autostart;
   $('dlg-settings').showModal();
 };
 $('set-browse').onclick = async () => {
@@ -245,7 +253,9 @@ $('set-browse').onclick = async () => {
 };
 $('dlg-settings').addEventListener('close', () => {
   if ($('dlg-settings').returnValue !== 'ok') return;
-  invoke('set_settings', { settings: { dir: $('set-dir').value, connections: Number($('set-conn').value) || 8 } });
+  invoke('set_settings', {
+    settings: { dir: $('set-dir').value, connections: Number($('set-conn').value) || 8, autostart: $('set-autostart').checked },
+  });
 });
 
 document.addEventListener('keydown', (e) => {

@@ -33,11 +33,28 @@ cargo run --release -p rdm-cli -- https://example.com/file.zip -c 8 -d .
 cargo run --release -p rdm-app
 ```
 
-To build an installer (NSIS), run this from `app/`:
+To build an installer (NSIS), run this from `app/`. The result is `target/release/bundle/nsis/RDM_<version>_x64-setup.exe`:
 
 ```bash
 npx tauri build
 ```
+
+Use the release build or the installed app. `target/debug/rdm-app.exe` opens a console window on purpose, for logs.
+
+### Background use
+
+The extension only works while RDM is running, so RDM lives in the tray:
+- **Closing the window keeps RDM running.** The window is destroyed along with its WebView2 processes, leaving only the download engine. To exit, use **Quit** in the tray icon's menu.
+- **Start with Windows** (on by default, toggle it in Options) launches RDM with `--hidden`, straight into the tray without a window.
+- **Single instance.** Launching RDM again just shows the running one.
+
+Measured idle footprint (private memory / CPU):
+
+| | RDM | IDM 6.42 |
+|---|---|---|
+| Started with Windows, tray only | 3 MB / 0% | 11 MB / 0% |
+| Window closed to tray | 5 MB / 0% | — |
+| Window open | ~99 MB / 0.2% (WebView2 UI) | — |
 
 The app listens on `127.0.0.1:47123` for the extension. It rejects requests that carry a web page `Origin`.
 

@@ -47,7 +47,7 @@
     <section class="list">
       <table>
         <thead>
-          <tr><th class="c-name">File Name</th><th>Size</th><th>Status</th><th>Time Left</th><th>Transfer Rate</th><th>Conn.</th><th>Added</th></tr>
+          <tr><th>File Name</th><th class="c-size">Size</th><th class="c-status">Status</th><th class="c-left">Time Left</th><th class="c-rate">Transfer Rate</th><th class="c-conn">Conn.</th><th class="c-added">Added</th></tr>
         </thead>
         <tbody id="rows"></tbody>
       </table>
@@ -89,6 +89,8 @@
       <label>Connections per download (1–32)
         <input id="set-conn" type="number" min="1" max="32">
       </label>
+      <label class="check"><input id="set-autostart" type="checkbox"> Start with Windows (in the tray, so the browser extension always works)</label>
+      <p class="hint">Closing this window keeps RDM running in the tray. Use the tray icon's Quit to exit.</p>
       <menu><button type="button" onclick="this.closest('dialog').close('cancel')">Cancel</button><button value="ok" class="primary">Save</button></menu>
     </form>
   </dialog>

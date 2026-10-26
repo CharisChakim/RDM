@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WebviewWindowBuilder};
+use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -41,6 +44,13 @@ struct Entry {
 struct Settings {
     dir: PathBuf,
     connections: usize,
+    /// Start hidden in the tray when Windows starts, so the browser extension always has RDM.
+    #[serde(default = "yes")]
+    autostart: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize)]
@@ -304,8 +314,64 @@ fn get_settings(state: State<App>) -> Settings {
 
 #[tauri::command]
 fn set_settings(app: AppHandle, settings: Settings) {
+    apply_autostart(&app, settings.autostart);
     app.state::<App>().data.lock().unwrap().settings = Settings { connections: settings.connections.clamp(1, 32), ..settings };
     store::save(&app);
+}
+
+/// Registers (or removes) the "start with Windows" entry, launching straight into the tray.
+fn apply_autostart(app: &AppHandle, on: bool) {
+    let launcher = app.autolaunch();
+    let _ = if on { launcher.enable() } else { launcher.disable() };
+}
+
+/// Shows the window, creating it if it was closed. Closing destroys the window and its WebView2
+/// processes, so RDM idles in the tray with only the download engine in memory.
+pub fn show_main(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        w.show().ok();
+        w.unminimize().ok();
+        w.set_focus().ok();
+        return;
+    }
+    if let Some(config) = app.config().app.windows.first() {
+        if let Ok(w) = WebviewWindowBuilder::from_config(app, config).and_then(|b| b.build()) {
+            w.set_focus().ok();
+        }
+    }
+}
+
+fn quit(app: &AppHandle) {
+    // Pausing makes every running download write its resume state before we go.
+    for e in app.state::<App>().data.lock().unwrap().entries.iter() {
+        if let Some(h) = &e.handle {
+            h.pause();
+        }
+    }
+    store::save(app);
+    app.exit(0);
+}
+
+fn tray(app: &AppHandle) -> tauri::Result<()> {
+    let open = MenuItem::with_id(app, "open", "Open RDM", true, None::<&str>)?;
+    let exit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+    TrayIconBuilder::with_id("main")
+        .icon(app.default_window_icon().cloned().expect("app icon"))
+        .tooltip("RDM")
+        .menu(&Menu::with_items(app, &[&open, &exit])?)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, e| match e.id.as_ref() {
+            "open" => show_main(app),
+            "quit" => quit(app),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, e| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
+                show_main(tray.app_handle());
+            }
+        })
+        .build(app)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -319,9 +385,10 @@ async fn ticker(app: AppHandle) {
     let mut tick = tokio::time::interval(Duration::from_millis(500));
     loop {
         tick.tick().await;
-        {
+        let active = {
             let state = app.state::<App>();
             let mut data = state.data.lock().unwrap();
+            let active = data.entries.iter().any(|e| e.handle.is_some());
             for e in data.entries.iter_mut() {
                 let Some(h) = &e.handle else { continue };
                 let p = h.progress();
@@ -334,24 +401,43 @@ async fn ticker(app: AppHandle) {
                     e.path = p.path;
                 }
             }
+            active
+        };
+        // Nothing downloading: nothing to redraw (add/finish/pause already push their own update).
+        if active {
+            emit(&app);
         }
-        emit(&app);
     }
 }
 
 fn main() {
     tauri::Builder::default()
+        // Launching RDM again (Start menu, shortcut) just shows the running one.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
+        .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let data = store::load(&handle);
+            let autostart = data.settings.autostart;
             app.manage(App { data: Mutex::new(data), client: rdm_engine::client() });
+            apply_autostart(&handle, autostart);
+            tray(&handle)?;
+            if !std::env::args().any(|a| a == "--hidden") {
+                show_main(&handle);
+            }
             tauri::async_runtime::spawn(ticker(handle.clone()));
             tauri::async_runtime::spawn(server::run(handle));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![add, page_formats, hls_variants, list, pause, resume, remove, open, get_settings, set_settings, pick_dir])
-        .run(tauri::generate_context!())
-        .expect("error while running RDM");
+        .build(tauri::generate_context!())
+        .expect("error while running RDM")
+        .run(|_app, event| {
+            // Closing the last window keeps RDM in the tray; only Quit (exit code set) ends it.
+            if let RunEvent::ExitRequested { api, code: None, .. } = event {
+                api.prevent_exit();
+            }
+        });
 }

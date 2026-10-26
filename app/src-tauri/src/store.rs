@@ -14,6 +14,7 @@ pub fn load(app: &AppHandle) -> Data {
             settings: Settings {
                 dir: app.path().download_dir().unwrap_or_else(|_| std::env::temp_dir()),
                 connections: 8,
+                autostart: true,
             },
             entries: vec![],
         });

@@ -44,11 +44,7 @@ async fn download(
         return Err(StatusCode::FORBIDDEN);
     }
     let id = crate::add_download(&app, job);
-    if let Some(w) = app.get_webview_window("main") {
-        w.show().ok();
-        w.unminimize().ok();
-        w.set_focus().ok();
-    }
+    crate::show_main(&app);
     Ok(Json(json!({ "id": id })))
 }
 
